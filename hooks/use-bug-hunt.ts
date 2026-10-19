@@ -1,92 +1,96 @@
-
 "use client"
 
 import { useState, useEffect, useRef } from "react"
 import { type BugHunt, type BugHuntSubmission, BUG_HUNT_TEMPLATES } from "@/types/bug-hunt"
-import { db } from "@/firebaseConfig"
-import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where } from "firebase/firestore"
-import { transferRewardFromAdmin } from "@/lib/transfer-reward"
-
-
 
 export function useBugHunt() {
   const [bugHunts, setBugHunts] = useState<BugHunt[]>([])
   const [submissions, setSubmissions] = useState<BugHuntSubmission[]>([])
 
   // Use a ref to always access the latest bugHunts state in event handlers
-  const bugHuntsRef = useRef<BugHunt[]>(bugHunts);
+  const bugHuntsRef = useRef<BugHunt[]>(bugHunts)
   useEffect(() => {
-    bugHuntsRef.current = bugHunts;
-  }, [bugHunts]);
+    bugHuntsRef.current = bugHunts
+  }, [bugHunts])
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       const incrementHandler = async (event: Event) => {
-        const customEvent = event as CustomEvent;
-        const { huntId } = customEvent.detail;
-        // Get current count from ref
-        const current = bugHuntsRef.current.find(h => h.id === huntId)?.currentParticipants || 0;
-        const newCount = current + 1;
-        setTimeout(() => {
-          setBugHunts(prev => prev.map(hunt =>
-            hunt.id === huntId
-              ? { ...hunt, currentParticipants: newCount }
-              : hunt
-          ));
-        }, 0);
+        const customEvent = event as CustomEvent
+        const { huntId } = customEvent.detail
+        const current = bugHuntsRef.current.find(h => h.id === huntId)?.currentParticipants || 0
+        const newCount = current + 1
+        setBugHunts(prev => prev.map(hunt =>
+          hunt.id === huntId ? { ...hunt, currentParticipants: newCount } : hunt
+        ))
         try {
-          await updateDoc(doc(db, "bugHunts", huntId), {
-            currentParticipants: newCount,
-            updatedAt: new Date().toISOString(),
-          });
+          await fetch(`/api/bug-hunts/${huntId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ currentParticipants: newCount }),
+          })
         } catch (e) {
-          console.error("Failed to increment participants:", e);
+          console.error("Failed to increment participants:", e)
         }
-      };
+      }
+
       const decrementHandler = async (event: Event) => {
-        const customEvent = event as CustomEvent;
-        const { huntId } = customEvent.detail;
-        // Get current count from ref
-        const current = bugHuntsRef.current.find(h => h.id === huntId)?.currentParticipants || 0;
-        const newCount = Math.max(current - 1, 0);
-        setTimeout(() => {
-          setBugHunts(prev => prev.map(hunt =>
-            hunt.id === huntId
-              ? { ...hunt, currentParticipants: newCount }
-              : hunt
-          ));
-        }, 0);
+        const customEvent = event as CustomEvent
+        const { huntId } = customEvent.detail
+        const current = bugHuntsRef.current.find(h => h.id === huntId)?.currentParticipants || 0
+        const newCount = Math.max(current - 1, 0)
+        setBugHunts(prev => prev.map(hunt =>
+          hunt.id === huntId ? { ...hunt, currentParticipants: newCount } : hunt
+        ))
         try {
-          await updateDoc(doc(db, "bugHunts", huntId), {
-            currentParticipants: newCount,
-            updatedAt: new Date().toISOString(),
-          });
+          await fetch(`/api/bug-hunts/${huntId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ currentParticipants: newCount }),
+          })
         } catch (e) {
-          console.error("Failed to decrement participants:", e);
+          console.error("Failed to decrement participants:", e)
         }
-      };
-      window.addEventListener("incrementParticipants", incrementHandler);
-      window.addEventListener("decrementParticipants", decrementHandler);
+      }
+
+      window.addEventListener("incrementParticipants", incrementHandler)
+      window.addEventListener("decrementParticipants", decrementHandler)
       return () => {
-        window.removeEventListener("incrementParticipants", incrementHandler);
-        window.removeEventListener("decrementParticipants", decrementHandler);
-      };
+        window.removeEventListener("incrementParticipants", incrementHandler)
+        window.removeEventListener("decrementParticipants", decrementHandler)
+      }
     }
-  }, []); // Only set up listeners once
+  }, [])
 
   useEffect(() => {
-    // Fetch bug hunts from Firestore
+    // Fetch bug hunts from server API (backed by MongoDB)
     const fetchBugHunts = async () => {
-      const huntsSnapshot = await getDocs(collection(db, "bugHunts"))
-      const hunts: BugHunt[] = huntsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as BugHunt))
-      setBugHunts(hunts)
+      try {
+        const res = await fetch("/api/bug-hunts", { credentials: "include" })
+        if (res.ok) {
+          const hunts: BugHunt[] = await res.json()
+          setBugHunts(hunts)
+        }
+      } catch (err) {
+        console.error("Failed to load bug hunts:", err)
+      }
     }
-    // Fetch submissions from Firestore
+
+    // Fetch submissions from server API (backed by MongoDB)
     const fetchSubmissions = async () => {
-      const submissionsSnapshot = await getDocs(collection(db, "bugHuntSubmissions"))
-      const subs: BugHuntSubmission[] = submissionsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as BugHuntSubmission))
-      setSubmissions(subs)
+      try {
+        const res = await fetch("/api/bug-submissions", { credentials: "include" })
+        if (res.ok) {
+          const subs: BugHuntSubmission[] = await res.json()
+          setSubmissions(subs)
+        }
+      } catch (err) {
+        console.error("Failed to load bug submissions:", err)
+      }
     }
+
     fetchBugHunts()
     fetchSubmissions()
   }, [])
@@ -94,26 +98,37 @@ export function useBugHunt() {
   const createBugHunt = async (
     huntData: Omit<BugHunt, "id" | "createdAt" | "updatedAt" | "currentParticipants" | "submissions">
   ) => {
-    const newHunt = {
-      ...huntData,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      currentParticipants: 0,
-      submissions: [],
+    try {
+      const res = await fetch("/api/bug-hunts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(huntData),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Failed to create bug hunt")
+      }
+      const created: BugHunt = await res.json()
+      setBugHunts(prev => [...prev, created])
+      return created
+    } catch (error) {
+      console.error("Error creating bug hunt:", error)
+      throw error
     }
-    const docRef = await addDoc(collection(db, "bugHunts"), newHunt)
-    setBugHunts(prev => [...prev, { ...newHunt, id: docRef.id } as BugHunt])
-    return { ...newHunt, id: docRef.id } as BugHunt
   }
 
   const removeBugHunt = async (huntId: string) => {
     try {
-      await deleteDoc(doc(db, "bugHunts", huntId))
+      const res = await fetch(`/api/bug-hunts/${huntId}`, {
+        method: "DELETE",
+        credentials: "include",
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Failed to remove bug hunt")
+      }
       setBugHunts(prev => prev.filter(hunt => hunt.id !== huntId))
-      // Remove all submissions related to this hunt
-      const q = query(collection(db, "bugHuntSubmissions"), where("huntId", "==", huntId))
-      const subsSnapshot = await getDocs(q)
-      subsSnapshot.forEach(subDoc => deleteDoc(doc(db, "bugHuntSubmissions", subDoc.id)))
       setSubmissions(prev => prev.filter(sub => sub.huntId !== huntId))
     } catch (error) {
       console.error("Error removing bug hunt:", error)
@@ -122,33 +137,55 @@ export function useBugHunt() {
   }
 
   const updateBugHunt = async (huntId: string, updates: Partial<BugHunt>) => {
-    await updateDoc(doc(db, "bugHunts", huntId), { ...updates, updatedAt: new Date().toISOString() })
-    setBugHunts(prev => prev.map(hunt => hunt.id === huntId ? { ...hunt, ...updates, updatedAt: new Date().toISOString() } : hunt))
+    try {
+      const res = await fetch(`/api/bug-hunts/${huntId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(updates),
+      })
+      if (res.ok) {
+        const updated: BugHunt = await res.json()
+        setBugHunts(prev => prev.map(hunt => hunt.id === huntId ? { ...hunt, ...updated } : hunt))
+      }
+    } catch (error) {
+      console.error("Error updating bug hunt:", error)
+    }
   }
 
   const submitToBugHunt = async (submission: Omit<BugHuntSubmission, "id" | "submittedAt" | "status">) => {
-    const newSubmission = {
-      ...submission,
-      submittedAt: new Date().toISOString(),
-      status: "pending" as "pending",
-    }
-    const docRef = await addDoc(collection(db, "bugHuntSubmissions"), newSubmission)
-    const submissionWithId: BugHuntSubmission = { ...newSubmission, id: docRef.id }
-    setSubmissions(prev => [...prev, submissionWithId])
-
-    // Update hunt's current participants count
-    const hunt = bugHunts.find((h) => h.id === submission.huntId)
-    if (hunt) {
-      const userAlreadyParticipating = submissions.some(
-        (s) => s.huntId === submission.huntId && s.userId === submission.userId,
-      )
-      if (!userAlreadyParticipating) {
-        await updateBugHunt(submission.huntId, {
-          currentParticipants: hunt.currentParticipants + 1,
-        })
+    try {
+      const res = await fetch("/api/bug-submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(submission),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Failed to submit to bug hunt")
       }
+      const created: BugHuntSubmission = await res.json()
+      setSubmissions(prev => [...prev, created])
+
+      // Update hunt's current participants count
+      const hunt = bugHunts.find(h => h.id === submission.huntId)
+      if (hunt) {
+        const userAlreadyParticipating = submissions.some(
+          s => s.huntId === submission.huntId && s.userId === submission.userId
+        )
+        if (!userAlreadyParticipating) {
+          await updateBugHunt(submission.huntId, {
+            currentParticipants: (hunt.currentParticipants || 0) + 1,
+          })
+        }
+      }
+
+      return created
+    } catch (error) {
+      console.error("Error submitting to bug hunt:", error)
+      throw error
     }
-    return { ...newSubmission, id: docRef.id } as BugHuntSubmission
   }
 
   const reviewSubmission = async (
@@ -161,58 +198,66 @@ export function useBugHunt() {
     if (status === "approved" && pointsAwarded && pointsAwarded > 0 && reviewedBy) {
       const sub = submissions.find(s => s.id === submissionId)
       if (sub && sub.username && sub.userId) {
-        await transferRewardFromAdmin({
-          adminUsername: reviewedBy,
-          hunterUsername: sub.username,
-          hunterUid: sub.userId,
-          huntId: sub.huntId,
-          submissionId: sub.id,
-          amount: pointsAwarded,
+        const res = await fetch("/api/bug-hunt/review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            adminUsername: reviewedBy,
+            hunterUsername: sub.username,
+            hunterUid: sub.userId,
+            huntId: sub.huntId,
+            submissionId: sub.id,
+            amount: pointsAwarded,
+            status,
+            reviewNotes,
+          }),
         })
-      } else {
-        throw new Error("Missing submission user profile")
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          console.warn("Server reward transfer warning:", errData?.error)
+        }
       }
     }
 
-    await updateDoc(doc(db, "bugHuntSubmissions", submissionId), {
-      status,
-      reviewNotes,
-      pointsAwarded,
-      reviewedBy,
-      reviewedAt: new Date().toISOString(),
-    })
-    setSubmissions(prev => prev.map(submission =>
-      submission.id === submissionId
-        ? {
-            ...submission,
-            status,
-            reviewNotes,
-            pointsAwarded,
-            reviewedBy,
-            reviewedAt: new Date().toISOString(),
-          }
-        : submission
-    ))
+    try {
+      const res = await fetch(`/api/bug-submissions/${submissionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          status,
+          reviewNotes,
+          pointsAwarded,
+        }),
+      })
+      if (res.ok) {
+        const updated = await res.json()
+        setSubmissions(prev => prev.map(s => s.id === submissionId ? { ...s, ...updated } : s))
+      }
+    } catch (err) {
+      console.error("Failed to update submission status:", err)
+    }
   }
 
   const getActiveBugHunts = () => {
-    return bugHunts.filter((hunt) => hunt.status === "active")
+    return bugHunts.filter(hunt => hunt.status === "active")
   }
 
   const getBugHuntById = (huntId: string) => {
-    return bugHunts.find((hunt) => hunt.id === huntId)
+    return bugHunts.find(hunt => hunt.id === huntId)
   }
 
   const getSubmissionsByHunt = (huntId: string) => {
-    return submissions.filter((submission) => submission.huntId === huntId)
+    return submissions.filter(submission => submission.huntId === huntId)
   }
 
   const getSubmissionsByUser = (userId: string) => {
-    return submissions.filter((submission) => submission.userId === userId)
+    return submissions.filter(submission => submission.userId === userId)
   }
 
   const getUserBugHunts = (userId: string) => {
-    return bugHunts.filter((hunt) => hunt.createdBy === userId)
+    return bugHunts.filter(hunt => hunt.createdBy === userId)
   }
 
   return {
@@ -220,7 +265,7 @@ export function useBugHunt() {
     submissions,
     createBugHunt,
     updateBugHunt,
-    removeBugHunt, // Added removeBugHunt to exports
+    removeBugHunt,
     submitToBugHunt,
     reviewSubmission,
     getActiveBugHunts,

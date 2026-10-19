@@ -59,10 +59,32 @@ export const createBatchPayouts = functions.https.onCall(
     const userDoc = await db.collection("users").doc(callerUid).get();
     const userData = userDoc.data();
 
-    if (!userData || userData.userType !== "admin") {
+    if (!userData || (userData.userType !== "admin" && userData.role !== "admin" && userData.role !== "platform_admin")) {
       throw new functions.https.HttpsError(
         "permission-denied",
         "Only administrators can create batch payouts"
+      );
+    }
+
+    // Verify tenant authorization against organization wallet
+    const walletDoc = await db.collection("org_wallets").doc(data.orgId).get();
+    if (!walletDoc.exists) {
+      throw new functions.https.HttpsError(
+        "not-found",
+        `Organization wallet not found for orgId: ${data.orgId}`
+      );
+    }
+
+    const wallet = walletDoc.data();
+    const isPlatformAdmin = userData.userType === "platform_admin" || userData.role === "platform_admin";
+    const isOrgAdmin = userData.orgId === data.orgId || userData.organizationId === data.orgId;
+    const isWalletAdmin = Array.isArray(wallet?.adminUids) && wallet.adminUids.includes(callerUid);
+    const isWalletOwner = wallet?.ownerUid === callerUid;
+
+    if (!isPlatformAdmin && !isOrgAdmin && !isWalletAdmin && !isWalletOwner) {
+      throw new functions.https.HttpsError(
+        "permission-denied",
+        `Caller ${callerUid} is not authorized to disburse funds for organization ${data.orgId}`
       );
     }
 
@@ -144,6 +166,51 @@ export const createBatchPayouts = functions.https.onCall(
           !payout.amount
         ) {
           throw new Error("Missing required fields in payout row");
+        }
+
+        // Validate submission exists and is approved for payout
+        let subDoc = await db.collection("bug_submissions").doc(payout.submissionId).get();
+        if (!subDoc.exists) {
+          subDoc = await db.collection("vulnerabilities").doc(payout.submissionId).get();
+        }
+        if (!subDoc.exists) {
+          subDoc = await db.collection("bugReports").doc(payout.submissionId).get();
+        }
+        if (!subDoc.exists) {
+          subDoc = await db.collection("submissions").doc(payout.submissionId).get();
+        }
+
+        if (!subDoc.exists) {
+          throw new Error(`Referenced submission '${payout.submissionId}' not found`);
+        }
+
+        const subData = subDoc.data() || {};
+        if (subData.huntId && subData.huntId !== payout.huntId) {
+          throw new Error(`Submission huntId '${subData.huntId}' does not match row huntId '${payout.huntId}'`);
+        }
+        if (subData.orgId && subData.orgId !== data.orgId) {
+          throw new Error(`Submission orgId '${subData.orgId}' does not match organization '${data.orgId}'`);
+        }
+        const recordedHunterUid = subData.hunterUid || subData.reporterUid || subData.userId;
+        if (recordedHunterUid && recordedHunterUid !== payout.hunterUid) {
+          throw new Error(`Submission reporter '${recordedHunterUid}' does not match row hunterUid '${payout.hunterUid}'`);
+        }
+        const subStatus = (subData.status || "").toLowerCase();
+        const approvedStatuses = ["approved", "accepted", "eligible_for_payout", "triaged", "resolved"];
+        if (!approvedStatuses.includes(subStatus)) {
+          throw new Error(`Submission is not approved for payout (current status: ${subData.status || "unknown"})`);
+        }
+        if (
+          subData.payoutStatus === "paid" ||
+          subData.payoutStatus === "completed" ||
+          subData.payoutStatus === "processing" ||
+          subData.paid === true
+        ) {
+          throw new Error(`Submission ${payout.submissionId} has already been paid or is actively processing a payout`);
+        }
+        const maxReward = subData.rewardAmount || subData.bountyAmount || subData.approvedReward;
+        if (typeof maxReward === "number" && maxReward > 0 && payout.amount > maxReward) {
+          throw new Error(`Payout amount (${payout.amount}) exceeds approved reward (${maxReward})`);
         }
 
         // Queue payout task

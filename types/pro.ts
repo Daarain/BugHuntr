@@ -93,6 +93,8 @@ export interface ProRecommendation {
   certifications: string[];
   reasonTags: string[];
   matchPercentage: number;
+  isEligible?: boolean;
+  missingRequirements?: string[];
 }
 
 export interface ProNDA {

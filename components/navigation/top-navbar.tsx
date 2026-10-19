@@ -22,20 +22,25 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/components/auth/auth-context";
-import { useState, useEffect, memo } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { useSearch } from "@/components/search/search-context";
 import { toast } from "sonner";
-import { db } from "@/firebaseConfig";
-import {
-  collection,
-  onSnapshot,
-  query,
-  where,
-  updateDoc,
-  doc,
-  getDocs,
-  increment,
-} from "firebase/firestore";
+
+export const INVITATIONS_POLL_INTERVAL_MS = 30000;
+
+export interface TopNavbarInvitation {
+  id: string;
+  huntId: string;
+  huntTitle: string;
+  companyName: string;
+  hunterId?: string;
+  hunterUsername?: string;
+  email?: string;
+  status: "pending" | "accepted" | "declined" | "expired" | string;
+  invitedBy?: string;
+  invitedAt?: string;
+  expiresAt?: string;
+}
 
 interface TopNavbarProps {
   onMenuClick: () => void;
@@ -50,7 +55,14 @@ function TopNavbarComponent({ onMenuClick }: TopNavbarProps) {
   const [localSearchTerm, setLocalSearchTerm] = useState<string>(
     searchTerm ?? "",
   );
-  const [invitations, setInvitations] = useState<any[]>([]);
+  const [invitations, setInvitations] = useState<TopNavbarInvitation[]>([]);
+  const [isLoadingInvitations, setIsLoadingInvitations] = useState<boolean>(false);
+  const [invitationsError, setInvitationsError] = useState<string | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+
+  const inFlightRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Debounce search input to reduce re-renders
   useEffect(() => {
@@ -61,95 +73,153 @@ function TopNavbarComponent({ onMenuClick }: TopNavbarProps) {
     return () => clearTimeout(debounceTimer);
   }, [localSearchTerm, setSearchTerm]);
 
-  useEffect(() => {
+  const fetchInvitations = useCallback(async (isInitial = false) => {
     if (!isAuthenticated || !user?.id) {
       setInvitations([]);
+      setInvitationsError(null);
+      setIsLoadingInvitations(false);
       return;
     }
 
-    const hunterId = user.id;
-    const hunterUsername = user.username || user.id;
+    // Avoid overlapping requests
+    if (inFlightRef.current) {
+      return;
+    }
 
-    let byId: any[] = [];
-    let byUsername: any[] = [];
+    inFlightRef.current = true;
+    if (isInitial) {
+      setIsLoadingInvitations(true);
+    }
 
-    const mergeInvites = () => {
-      const seen = new Set<string>();
-      const merged: any[] = [];
-      [...byId, ...byUsername].forEach((invite) => {
-        if (!seen.has(invite.id)) {
-          seen.add(invite.id);
-          merged.push(invite);
-        }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const res = await fetch("/api/pro/invitations?status=pending", {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+        credentials: "include",
+        signal: controller.signal,
       });
-      setInvitations(merged);
-    };
 
-    const invitationsByIdQuery = query(
-      collection(db, "proInvitations"),
-      where("hunterId", "==", hunterId),
-      where("status", "==", "pending"),
-    );
+      if (!isMountedRef.current) return;
 
-    const invitationsByUsernameQuery = query(
-      collection(db, "proInvitations"),
-      where("hunterUsername", "==", hunterUsername),
-      where("status", "==", "pending"),
-    );
+      if (!res.ok) {
+        if (res.status === 401) {
+          // Unauthenticated or expired session
+          setInvitations([]);
+          setInvitationsError(null);
+          return;
+        }
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || `Failed to fetch invitations: HTTP ${res.status}`);
+      }
 
-    const unsubId = onSnapshot(invitationsByIdQuery, (snapshot) => {
-      byId = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        ...(docSnap.data() as any),
+      const data = await res.json();
+      if (!isMountedRef.current) return;
+
+      const rawList = Array.isArray(data?.invitations)
+        ? data.invitations
+        : Array.isArray(data)
+          ? data
+          : [];
+
+      const normalized: TopNavbarInvitation[] = rawList.map((item: any) => ({
+        ...item,
+        id: item.id || item._id,
+        huntId: item.huntId || item.hunt_id,
+        huntTitle: item.huntTitle || item.hunt_title || "Pro Hunt",
+        companyName: item.companyName || item.company_name || "Company",
+        status: item.status || "pending",
       }));
-      mergeInvites();
-    });
 
-    const unsubUsername = onSnapshot(invitationsByUsernameQuery, (snapshot) => {
-      byUsername = snapshot.docs.map((docSnap) => ({
-        id: docSnap.id,
-        ...(docSnap.data() as any),
-      }));
-      mergeInvites();
-    });
+      setInvitations(normalized);
+      setInvitationsError(null);
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        return;
+      }
+      if (!isMountedRef.current) return;
+      console.error("Failed to fetch pro invitations:", err);
+      setInvitationsError(err.message || "Failed to load invitations");
+    } finally {
+      inFlightRef.current = false;
+      if (isMountedRef.current && isInitial) {
+        setIsLoadingInvitations(false);
+      }
+    }
+  }, [isAuthenticated, user?.id]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    if (!isAuthenticated || !user?.id) {
+      setInvitations([]);
+      setInvitationsError(null);
+      setIsLoadingInvitations(false);
+      return;
+    }
+
+    fetchInvitations(true);
+
+    const intervalId = setInterval(() => {
+      fetchInvitations(false);
+    }, INVITATIONS_POLL_INTERVAL_MS);
 
     return () => {
-      unsubId();
-      unsubUsername();
+      isMountedRef.current = false;
+      clearInterval(intervalId);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
-  }, [isAuthenticated, user?.id, user?.username]);
+  }, [isAuthenticated, user?.id, fetchInvitations]);
 
   const handleInvitationAction = async (
     invitationId: string,
     huntId: string,
     status: "accepted" | "declined",
   ) => {
+    if (actionLoadingId) return; // Prevent duplicate actions
+    setActionLoadingId(invitationId);
+
     try {
-      await updateDoc(doc(db, "proInvitations", invitationId), {
-        status,
-        respondedAt: new Date().toISOString(),
+      const res = await fetch(`/api/pro/invitations/${encodeURIComponent(invitationId)}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({ status }),
       });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.error || `Failed to update invitation: HTTP ${res.status}`);
+      }
+
+      if (isMountedRef.current) {
+        setInvitations((prev) => prev.filter((inv) => inv.id !== invitationId));
+      }
 
       if (status === "accepted") {
         toast.success("Invitation accepted");
-        const huntSnapshot = await getDocs(
-          query(collection(db, "proBugHunts"), where("id", "==", huntId)),
-        );
-        if (!huntSnapshot.empty) {
-          await Promise.all(
-            huntSnapshot.docs.map((docSnap) =>
-              updateDoc(docSnap.ref, {
-                currentHunters: increment(1),
-                updatedAt: new Date().toISOString(),
-              }),
-            ),
-          );
-        }
       } else {
         toast.info("Invitation declined");
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to update invitation:", error);
+      toast.error(error.message || "Failed to update invitation");
+    } finally {
+      if (isMountedRef.current) {
+        setActionLoadingId(null);
+      }
     }
   };
 
@@ -245,17 +315,30 @@ function TopNavbarComponent({ onMenuClick }: TopNavbarProps) {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-80">
-                  <div className="px-3 py-2 text-sm font-semibold">
-                    Invitations
+                  <div className="flex items-center justify-between px-3 py-2 text-sm font-semibold">
+                    <span>Invitations</span>
+                    {invitations.length > 0 && (
+                      <span className="text-xs text-muted-foreground font-normal">
+                        ({invitations.length})
+                      </span>
+                    )}
                   </div>
                   <DropdownMenuSeparator />
-                  {invitations.length === 0 ? (
+                  {isLoadingInvitations && invitations.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                      Loading invitations...
+                    </div>
+                  ) : invitationsError && invitations.length === 0 ? (
+                    <div className="px-3 py-3 text-center text-xs text-destructive">
+                      {invitationsError}
+                    </div>
+                  ) : invitations.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-muted-foreground">
                       No pending invitations
                     </div>
                   ) : (
                     invitations.map((invite) => (
-                      <div key={invite.id} className="px-3 py-2">
+                      <div key={invite.id} className="px-3 py-2 border-b border-border/40 last:border-0">
                         <div className="text-sm font-medium">
                           {invite.huntTitle || "Pro Hunt"}
                         </div>
@@ -266,6 +349,7 @@ function TopNavbarComponent({ onMenuClick }: TopNavbarProps) {
                           <Button
                             size="sm"
                             className="h-7"
+                            disabled={actionLoadingId === invite.id}
                             onClick={() =>
                               handleInvitationAction(
                                 invite.id,
@@ -274,12 +358,13 @@ function TopNavbarComponent({ onMenuClick }: TopNavbarProps) {
                               )
                             }
                           >
-                            Accept
+                            {actionLoadingId === invite.id ? "Processing..." : "Accept"}
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             className="h-7"
+                            disabled={actionLoadingId === invite.id}
                             onClick={() =>
                               handleInvitationAction(
                                 invite.id,
@@ -288,7 +373,7 @@ function TopNavbarComponent({ onMenuClick }: TopNavbarProps) {
                               )
                             }
                           >
-                            Decline
+                            {actionLoadingId === invite.id ? "Processing..." : "Decline"}
                           </Button>
                         </div>
                       </div>

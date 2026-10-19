@@ -15,34 +15,23 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Wallet,
-  Play,
   CheckCircle2,
   XCircle,
   Clock,
   AlertCircle,
   Zap,
-  DollarSign,
   Send,
   Plus,
 } from "lucide-react";
 import { toast } from "sonner";
-import { db } from "@/firebaseConfig";
-import {
-  doc,
-  setDoc,
-  getDoc,
-  collection,
-  serverTimestamp,
-} from "firebase/firestore";
 
 export default function PayoutDemoPage() {
-  const { user, isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [demoOrgId, setDemoOrgId] = useState("demo_org_001");
+  const [demoOrgId] = useState("demo_org_001");
   const [demoWallet, setDemoWallet] = useState({
     balance: 10000000000, // 10,000 USDC in micro-units
     reserved: 0,
@@ -61,18 +50,20 @@ export default function PayoutDemoPage() {
       return;
     }
 
-    // Load demo data
     loadDemoData();
   }, [isAuthenticated]);
 
   const loadDemoData = async () => {
     try {
-      // Check if demo wallet exists
-      const walletRef = doc(db, "org_wallets", demoOrgId);
-      const walletDoc = await getDoc(walletRef);
-
-      if (walletDoc.exists()) {
-        setDemoWallet(walletDoc.data() as any);
+      const res = await fetch(`/api/wallet/org?orgId=${encodeURIComponent(demoOrgId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.wallet) {
+          setDemoWallet({
+            balance: data.wallet.balance ?? 10000000000,
+            reserved: data.wallet.reserved ?? 0,
+          });
+        }
       }
     } catch (error) {
       console.error("Error loading demo data:", error);
@@ -82,21 +73,22 @@ export default function PayoutDemoPage() {
   const initializeDemoWallet = async () => {
     setLoading(true);
     try {
-      const walletRef = doc(db, "org_wallets", demoOrgId);
-
-      await setDoc(walletRef, {
-        orgId: demoOrgId,
-        orgName: "Demo Organization",
-        balance: 10000000000, // 10,000 USDC
-        reserved: 0,
-        currency: "USDC",
-        network: "POLYGON",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        lastTopUpAt: serverTimestamp(),
-        totalTopUps: 10000000000,
-        totalPayouts: 0,
+      const res = await fetch("/api/wallet/org", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orgId: demoOrgId,
+          balance: 10000000000,
+          currency: "USDC",
+          network: "POLYGON",
+          action: "initialize",
+        }),
       });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to initialize wallet");
+      }
 
       setDemoWallet({
         balance: 10000000000,
@@ -116,69 +108,36 @@ export default function PayoutDemoPage() {
   ) => {
     setLoading(true);
     try {
-      const amount = parseFloat(payoutAmount);
-      const amountMicroUnits = Math.floor(amount * 1000000);
+      const res = await fetch("/api/payouts/demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: payoutAmount,
+          hunterWallet,
+          scenario,
+          orgId: demoOrgId,
+        }),
+      });
 
-      const orderId = `BH-PAYOUT-DEMO-${Date.now()}`;
-      const payoutRef = doc(db, "payouts", orderId);
-
-      const newPayout = {
-        order_id: orderId,
-        orgId: demoOrgId,
-        huntId: "demo_hunt_001",
-        submissionId: "demo_sub_001",
-        hunterUid: user?.id || "demo_hunter",
-        hunterWallet: hunterWallet,
-        amount: amountMicroUnits,
-        currency: "USDC",
-        network: "POLYGON",
-        status:
-          scenario === "success"
-            ? "completed"
-            : scenario === "failed"
-            ? "failed"
-            : "processing",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        createdBy: user?.id || "demo_admin",
-        tx_hash:
-          scenario === "success"
-            ? "0xdemo" + Math.random().toString(36).substring(7)
-            : null,
-        cryptomus_payout_id: "demo_" + Math.random().toString(36).substring(7),
-        cryptomus_response: {
-          demo: true,
-          scenario: scenario,
-        },
-      };
-
-      await setDoc(payoutRef, newPayout);
-
-      // Update wallet balance for demo
-      if (scenario === "success") {
-        const walletRef = doc(db, "org_wallets", demoOrgId);
-        await setDoc(
-          walletRef,
-          {
-            balance: demoWallet.balance - amountMicroUnits,
-            reserved: demoWallet.reserved,
-            updatedAt: serverTimestamp(),
-            totalPayouts: amountMicroUnits,
-          },
-          { merge: true }
-        );
-
-        setDemoWallet((prev) => ({
-          ...prev,
-          balance: prev.balance - amountMicroUnits,
-        }));
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create demo payout");
       }
 
-      setDemoPayouts((prev) => [newPayout, ...prev]);
+      if (data.wallet) {
+        setDemoWallet({
+          balance: data.wallet.balance,
+          reserved: data.wallet.reserved,
+        });
+      }
+
+      if (data.payout) {
+        setDemoPayouts((prev) => [data.payout, ...prev]);
+      }
 
       toast.success(
         scenario === "success"
-          ? `✅ Demo payout successful! $${amount} USDC sent`
+          ? `✅ Demo payout successful! $${payoutAmount} USDC sent`
           : scenario === "failed"
           ? "❌ Demo payout failed (as expected)"
           : "⏳ Demo payout processing..."
@@ -383,7 +342,7 @@ export default function PayoutDemoPage() {
               <div className="space-y-3">
                 {demoPayouts.map((payout, index) => (
                   <div
-                    key={index}
+                    key={payout.order_id || index}
                     className="p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
                   >
                     <div className="flex items-center justify-between">

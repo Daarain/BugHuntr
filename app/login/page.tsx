@@ -27,9 +27,6 @@ import {
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/components/auth/auth-context";
-import { db } from "@/firebaseConfig";
-import { collection, query, where, getDocs } from "firebase/firestore";
-import bcrypt from "bcryptjs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export default function LoginPage() {
@@ -88,9 +85,28 @@ export default function LoginPage() {
     return errors.length === 0;
   };
 
-  const sendTwoFactorCode = async (email: string): Promise<void> => {
-    console.log(`Sending 2FA code to ${email}`);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+
+  const sendTwoFactorCode = async (email: string): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/auth/2fa/challenge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.challengeToken) {
+        setValidationErrors([
+          data?.error || "Two-factor authentication provider is unconfigured.",
+        ]);
+        return false;
+      }
+      setChallengeToken(data.challengeToken);
+      return true;
+    } catch {
+      setValidationErrors(["Failed to dispatch verification code."]);
+      return false;
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -103,82 +119,57 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      // Fetch user from Firestore
-      const q = query(
-        collection(db, "users"),
-        where("email", "==", formData.email)
-      );
-      const querySnapshot = await getDocs(q);
-      if (querySnapshot.empty) {
-        setValidationErrors(["User not found. Please sign up first."]);
-        setIsLoading(false);
-        return;
-      }
-      const userDoc = querySnapshot.docs[0].data();
-      // Debug: log userDoc
-      console.log("Fetched userDoc:", userDoc);
-      if (!userDoc.password) {
-        setValidationErrors(["User password not set. Please sign up again."]);
-        setIsLoading(false);
-        return;
-      }
-      // Compare hashed password using bcrypt
-      const passwordMatch = await bcrypt.compare(
-        formData.password,
-        userDoc.password
-      );
-      if (!passwordMatch) {
-        setValidationErrors(["Incorrect password. Please try again."]);
+      // Authenticate strictly on the server: password comparison, role resolution, and 2FA
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
+          twoFactorCode: showTwoFactor ? formData.twoFactorCode : undefined,
+          challengeToken: showTwoFactor ? challengeToken : undefined,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        if (data?.newChallengeToken) {
+          setChallengeToken(data.newChallengeToken);
+        }
+        setValidationErrors([data?.error || "Authentication failed. Please try again."]);
         setIsLoading(false);
         return;
       }
 
-      // Optionally check userType/adminType for admin login
-      if (isAdminLogin && userDoc.userType !== "admin") {
-        setValidationErrors(["Not an admin account."]);
-        setIsLoading(false);
-        return;
-      }
-
-      // 2FA logic (if needed)
-      if (isAdminLogin && !showTwoFactor) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        await sendTwoFactorCode(formData.email);
+      // If server requires 2FA (enforced on server for all admin accounts regardless of tab)
+      if (data?.requires2FA) {
+        setChallengeToken(data.challengeToken);
         setShowTwoFactor(true);
         setIsLoading(false);
         return;
       }
-      if (isAdminLogin) {
-        if (formData.twoFactorCode !== "123456") {
-          setValidationErrors(["Invalid 2FA code. Please try again."]);
-          setIsLoading(false);
-          return;
-        }
-        // Pass userType from Firestore (default to 'company' for admins)
-        const userType =
-          userDoc.userType === "company" || userDoc.userType === "hunter"
-            ? userDoc.userType
-            : "company";
-        login(formData.email, formData.email, "admin", userType, userDoc);
+
+      if (data?.success && data?.user) {
+        login(
+          data.user.username,
+          data.user.email,
+          data.user.role,
+          data.user.userType,
+          data.user
+        );
+
+        alert("Login successful! Welcome back.");
+        setTimeout(() => {
+          router.push("/feed");
+        }, 500);
       } else {
-        // Pass userType from Firestore (default to 'hunter' for users)
-        const userType =
-          userDoc.userType === "company" || userDoc.userType === "hunter"
-            ? userDoc.userType
-            : "hunter";
-        login(formData.email, formData.email, "user", userType, userDoc);
+        setValidationErrors(["Unexpected server response."]);
       }
-
-      // Show success message instead of auto-redirect
-      alert("Login successful! Welcome back.");
-
-      // Optional: redirect after user acknowledgment
-      setTimeout(() => {
-        router.push("/feed");
-      }, 1000);
     } catch (error) {
       console.error("Login error:", error);
-      setValidationErrors(["Login failed. Please try again."]);
+      setValidationErrors(["Network error during login. Please try again."]);
     } finally {
       setIsLoading(false);
     }

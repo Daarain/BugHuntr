@@ -57,3 +57,35 @@ def test_fake_report_likely_fake_with_ela_and_mismatch(monkeypatch):
     assert result["score"] == 70
     assert "Screenshot text does not match description" in result["reasons"]
     assert "Screenshot shows signs of manipulation" in result["reasons"]
+
+
+class _StandaloneMonkeyPatch:
+    def __init__(self):
+        self._restores = []
+
+    def setattr(self, target, name, value):
+        old = getattr(target, name, None)
+        self._restores.append((target, name, old))
+        setattr(target, name, value)
+
+    def undo(self):
+        for target, name, old in reversed(self._restores):
+            if old is None:
+                delattr(target, name)
+            else:
+                setattr(target, name, old)
+        self._restores.clear()
+
+
+if __name__ == "__main__":
+    mp = _StandaloneMonkeyPatch()
+    try:
+        test_fake_report_genuine_without_screenshot()
+        test_fake_report_suspicious_mismatch_and_inconsistent(mp)
+        mp.undo()
+        test_fake_report_likely_fake_with_ela_and_mismatch(mp)
+        mp.undo()
+        print("OK: 3 fake report detection tests passed.")
+    except Exception as e:
+        mp.undo()
+        raise e

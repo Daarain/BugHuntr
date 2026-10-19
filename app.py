@@ -47,10 +47,62 @@ def add_cors(response):
 
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY environment variable not set")
+client = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-client = AsyncGroq(api_key=GROQ_API_KEY)
+# -------------------------
+# Fake report evaluation & heuristic helpers
+# -------------------------
+def _extract_ocr_text(screenshot_path: str) -> str:
+    return ""
+
+def _text_similarity(desc: str, ocr_text: str) -> float:
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, desc.lower(), ocr_text.lower()).ratio()
+
+def _compute_ela_score(screenshot_path: str) -> float:
+    return 0.0
+
+def _severity_inconsistent(title: str, desc: str, severity: str) -> bool:
+    return False
+
+def evaluate_fake_report(title: str, desc: str, severity: str, screenshot_path: str = None) -> dict:
+    if not screenshot_path:
+        return {
+            "status": "Likely Genuine",
+            "score": 0,
+            "reasons": []
+        }
+
+    score = 0
+    reasons = []
+
+    ocr_text = _extract_ocr_text(screenshot_path)
+    sim = _text_similarity(desc, ocr_text)
+    if sim < 0.2:
+        score += 30
+        reasons.append("Screenshot text does not match description")
+
+    ela = _compute_ela_score(screenshot_path)
+    if ela > 0.2:
+        score += 40
+        reasons.append("Screenshot shows signs of manipulation")
+
+    if _severity_inconsistent(title, desc, severity):
+        score += 30
+        reasons.append("Severity claim inconsistent with evidence")
+
+    if score >= 70:
+        status = "Likely Fake"
+    elif score >= 50:
+        status = "Suspicious"
+    else:
+        status = "Likely Genuine"
+
+    return {
+        "status": status,
+        "score": score,
+        "reasons": reasons
+    }
 
 class BugReport(BaseModel):
     title: str

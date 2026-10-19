@@ -1,6 +1,6 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react";
 import {
   type UserRanking,
   type RankTier,
@@ -13,323 +13,208 @@ import {
   REWARD_CATALOG,
   ACHIEVEMENTS,
   calculateAdvancedRanking,
-  getStreakMultiplier,
-} from "@/types/ranking"
-
-import { db } from "../firebaseConfig"
-import {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  onSnapshot,
-  addDoc,
-  query,
-  orderBy,
-  where,
-  limit,
-} from "firebase/firestore"
+} from "@/types/ranking";
 
 export function useRanking() {
-  const [userRankings, setUserRankings] = useState<UserRanking[]>([])
-  const [pointsTransactions, setPointsTransactions] = useState<PointsTransaction[]>([])
-  const [userRewards, setUserRewards] = useState<UserReward[]>([])
-  const [userAchievements, setUserAchievements] = useState<UserAchievement[]>([])
+  const [userRankings, setUserRankings] = useState<UserRanking[]>([]);
+  const [pointsTransactions, setPointsTransactions] = useState<PointsTransaction[]>([]);
+  const [userRewards, setUserRewards] = useState<UserReward[]>([]);
+  const [userAchievements, setUserAchievements] = useState<UserAchievement[]>([]);
 
-  // 📡 Load live data from Firestore with pagination
+  const fetchLeaderboard = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rankings/leaderboard?limit=100");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.leaderboard)) {
+          setUserRankings(data.leaderboard);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading rankings leaderboard:", error);
+    }
+  }, []);
+
+  const fetchTransactions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rankings/transactions?limit=50");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.transactions)) {
+          setPointsTransactions(data.transactions);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading points transactions:", error);
+    }
+  }, []);
+
+  const fetchRewards = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rankings/rewards");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.userRewards)) {
+          setUserRewards(data.userRewards);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading user rewards:", error);
+    }
+  }, []);
+
+  const fetchAchievements = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rankings/achievements");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.achievements)) {
+          setUserAchievements(data.achievements);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading achievements:", error);
+    }
+  }, []);
+
   useEffect(() => {
-    // Only load top 100 users for leaderboard (not all users)
-    const unsubUsers = onSnapshot(
-      query(collection(db, "userProfiles"), orderBy("points", "desc"), limit(100)),
-      (snapshot) => {
-        setUserRankings(
-          snapshot.docs.map((doc) => {
-            const data = doc.data()
-            return {
-              ...(data as Omit<UserRanking, "userId">),
-              userId: doc.id,
-              totalPoints: data.totalPoints ?? data.points ?? 0,
-            }
-          })
-        )
-      }
-    )
+    fetchLeaderboard();
 
-    // Load transactions only when needed (use getDocs instead of onSnapshot for non-realtime data)
-    const loadTransactions = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, "pointsTransactions"))
-        setPointsTransactions(snapshot.docs.map((doc) => doc.data() as PointsTransaction))
-      } catch (error) {
-        console.error("Error loading transactions:", error)
-      }
-    }
+    const t1 = setTimeout(() => fetchTransactions(), 500);
+    const t2 = setTimeout(() => fetchRewards(), 800);
+    const t3 = setTimeout(() => fetchAchievements(), 1000);
 
-    // Load rewards only when needed
-    const loadRewards = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, "userRewards"))
-        setUserRewards(snapshot.docs.map((doc) => doc.data() as UserReward))
-      } catch (error) {
-        console.error("Error loading rewards:", error)
-      }
-    }
-
-    // Load achievements only when needed
-    const loadAchievements = async () => {
-      try {
-        const snapshot = await getDocs(collection(db, "userAchievements"))
-        setUserAchievements(snapshot.docs.map((doc) => doc.data() as UserAchievement))
-      } catch (error) {
-        console.error("Error loading achievements:", error)
-      }
-    }
-
-    // Load non-critical data after a delay to prioritize rendering
-    const transactionTimer = setTimeout(() => loadTransactions(), 1000)
-    const rewardTimer = setTimeout(() => loadRewards(), 1500)
-    const achievementTimer = setTimeout(() => loadAchievements(), 2000)
+    // Polling interval for live leaderboard updates
+    const interval = setInterval(() => {
+      fetchLeaderboard();
+    }, 8000);
 
     return () => {
-      unsubUsers()
-      clearTimeout(transactionTimer)
-      clearTimeout(rewardTimer)
-      clearTimeout(achievementTimer)
-    }
-  }, [])
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      clearInterval(interval);
+    };
+  }, [fetchLeaderboard, fetchTransactions, fetchRewards, fetchAchievements]);
 
-  // 🏆 Rank utilities
+  // Rank calculation utilities
   const calculateRank = (points: number): RankTier => {
     for (const [tier, config] of Object.entries(RANK_CONFIGS)) {
       if (points >= config.minPoints && points <= config.maxPoints) {
-        return tier as RankTier
+        return tier as RankTier;
       }
     }
-    return "E"
-  }
+    return "E";
+  };
 
   const calculateRankProgress = (points: number, currentRank: RankTier) => {
-    const currentConfig = RANK_CONFIGS[currentRank]
-    const pointsInCurrentRank = points - currentConfig.minPoints
-    const pointsNeededForRank = currentConfig.maxPoints - currentConfig.minPoints
+    const currentConfig = RANK_CONFIGS[currentRank];
+    const pointsInCurrentRank = points - currentConfig.minPoints;
+    const pointsNeededForRank = currentConfig.maxPoints - currentConfig.minPoints;
 
     if (currentRank === "S") {
-      return { rankProgress: 100, nextRankPoints: 0 }
+      return { rankProgress: 100, nextRankPoints: 0 };
     }
 
-    const rankProgress = Math.min(100, (pointsInCurrentRank / pointsNeededForRank) * 100)
-    const nextRankPoints = currentConfig.maxPoints + 1 - points
+    const rankProgress = Math.min(100, (pointsInCurrentRank / pointsNeededForRank) * 100);
+    const nextRankPoints = currentConfig.maxPoints + 1 - points;
 
-    return { rankProgress, nextRankPoints }
-  }
+    return { rankProgress, nextRankPoints };
+  };
 
-  // ➕ Add points & update Firestore
+  // Add points via server API
   const addPoints = async (
     userId: string,
     bugId: number,
     severity: keyof typeof SEVERITY_POINTS,
     reason: string
   ) => {
-    const basePoints = SEVERITY_POINTS[severity]
-    const user = userRankings.find((u) => u.userId === userId)
-    const multiplier = user ? getStreakMultiplier(user.streak) : 1
-    const points = Math.floor(basePoints * multiplier)
-
-    // transaction log
-    const transaction: PointsTransaction = {
-      id: Date.now().toString(),
-      userId,
-      bugId,
-      points,
-      reason,
-      timestamp: new Date().toISOString(),
-      severity,
-      ...(multiplier > 1 && { multiplier }),
-    }
-    await setDoc(doc(db, "pointsTransactions", transaction.id), transaction)
-
-    // update user profile
-    if (user) {
-      const newPoints = user.totalPoints + points
-      const newRank = calculateRank(newPoints)
-      const { rankProgress, nextRankPoints } = calculateRankProgress(newPoints, newRank)
-
-      const now = new Date()
-      const lastActivity = new Date(user.lastActivity)
-      const daysSinceLast = Math.floor((now.getTime() - lastActivity.getTime()) / (1000 * 60 * 60 * 24))
-      const newStreak = daysSinceLast <= 1 ? user.streak + 1 : 1
-
-      await updateDoc(doc(db, "userProfiles", userId), {
-        totalPoints: newPoints,
-        rank: newRank,
-        bugsFound: user.bugsFound + 1,
-        weeklyPoints: user.weeklyPoints + points,
-        monthlyPoints: user.monthlyPoints + points,
-        streak: newStreak,
-        lastActivity: now.toISOString(),
-        rankProgress,
-        nextRankPoints,
-      })
-    } else {
-      // if user doesn't exist, create them
-      const newUser: UserRanking = {
-        userId,
-        username: userId,
-        totalPoints: points,
-        rank: calculateRank(points),
-        bugsFound: 1,
-        totalEarnings: 0,
-        joinDate: new Date().toISOString(),
-        weeklyPoints: points,
-        monthlyPoints: points,
-        streak: 1,
-        lastActivity: new Date().toISOString(),
-        rankProgress: 0,
-        nextRankPoints: 0,
-      }
-      const { rankProgress, nextRankPoints } = calculateRankProgress(points, newUser.rank)
-      newUser.rankProgress = rankProgress
-      newUser.nextRankPoints = nextRankPoints
-
-      await setDoc(doc(db, "userProfiles", userId), newUser)
-    }
-
-    checkAchievements(userId, severity)
-  }
-
-  // 🏅 Check achievements
-  const checkAchievements = async (
-    userId: string,
-    severity?: keyof typeof SEVERITY_POINTS
-  ) => {
-    const user = userRankings.find((u) => u.userId === userId)
-    if (!user) return
-
-    for (const achievement of ACHIEVEMENTS) {
-      const hasAchievement = userAchievements.some(
-        (ua) => ua.userId === userId && ua.achievementId === achievement.id
-      )
-      if (hasAchievement) continue
-
-      let unlocked = false
-      switch (achievement.requirement.type) {
-        case "points":
-          unlocked = user.totalPoints >= (achievement.requirement.value as number)
-          break
-        case "bugs":
-          unlocked = user.bugsFound >= (achievement.requirement.value as number)
-          break
-        case "streak":
-          unlocked = user.streak >= (achievement.requirement.value as number)
-          break
-        case "rank":
-          unlocked = user.rank === achievement.requirement.value
-          break
-        case "special":
-          if (achievement.requirement.value === "critical_bug" && severity === "critical") {
-            unlocked = true
-          }
-          break
-      }
-
-      if (unlocked) {
-        const newAchievement: UserAchievement = {
-          id: Date.now().toString(),
+    try {
+      const res = await fetch("/api/rankings/points", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           userId,
-          achievementId: achievement.id,
-          unlockedAt: new Date().toISOString(),
-        }
-        await setDoc(doc(db, "userAchievements", newAchievement.id), newAchievement)
+          bugId,
+          severity,
+          reason,
+        }),
+      });
 
-        // bonus points
-        const bonusTransaction: PointsTransaction = {
-          id: Date.now().toString() + "bonus",
-          userId,
-          bugId: 0,
-          points: achievement.pointsReward,
-          reason: `Achievement unlocked: ${achievement.name}`,
-          timestamp: new Date().toISOString(),
-          severity: "medium",
-        }
-        await setDoc(doc(db, "pointsTransactions", bonusTransaction.id), bonusTransaction)
-
-        await updateDoc(doc(db, "userProfiles", userId), {
-          totalPoints: user.totalPoints + achievement.pointsReward,
-        })
+      if (res.ok) {
+        await fetchLeaderboard();
+        await fetchTransactions();
+        // Trigger achievement check on server
+        await fetch("/api/rankings/achievements", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ severity }),
+        });
+        await fetchAchievements();
       }
+    } catch (error) {
+      console.error("Failed to add points:", error);
     }
-  }
+  };
 
-  // 🎁 Redeem rewards
+  // Redeem rewards via server API
   const redeemReward = async (
     userId: string,
     rewardId: string
   ): Promise<{ success: boolean; message: string }> => {
-    const user = userRankings.find((u) => u.userId === userId)
-    const reward = REWARD_CATALOG.find((r) => r.id === rewardId)
+    try {
+      const res = await fetch("/api/rankings/rewards/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rewardId }),
+      });
 
-    if (!user || !reward) return { success: false, message: "User or reward not found" }
-    if (!reward.available) return { success: false, message: "Reward not available" }
-    if (user.totalPoints < reward.pointsCost) return { success: false, message: "Insufficient points" }
-    if (reward.requiredRank && !isRankHigherOrEqual(user.rank, reward.requiredRank)) {
-      return { success: false, message: `Requires ${reward.requiredRank} or higher` }
-    }
+      const data = await res.json().catch(() => ({}));
 
-    if (reward.limitedQuantity) {
-      const redeemedCount = userRewards.filter((ur) => ur.rewardId === rewardId).length
-      if (redeemedCount >= reward.limitedQuantity) {
-        return { success: false, message: "Out of stock" }
+      if (res.ok && data.success) {
+        await fetchRewards();
+        await fetchLeaderboard();
+        await fetchTransactions();
+        return { success: true, message: data.message || "Reward redeemed successfully!" };
       }
+
+      return { success: false, message: data.error || data.message || "Failed to redeem reward" };
+    } catch (error: any) {
+      return { success: false, message: error.message || "Network error while redeeming reward" };
     }
+  };
 
-    await updateDoc(doc(db, "userProfiles", userId), {
-      totalPoints: user.totalPoints - reward.pointsCost,
-    })
-
-    const newReward: UserReward = {
-      id: Date.now().toString(),
-      userId,
-      rewardId,
-      redeemedAt: new Date().toISOString(),
-      status: "pending",
-    }
-    await setDoc(doc(db, "userRewards", newReward.id), newReward)
-
-    return { success: true, message: "Reward redeemed!" }
-  }
-
-  // helpers
   const isRankHigherOrEqual = (userRank: RankTier, requiredRank: RankTier): boolean => {
-    const order: RankTier[] = ["E", "D", "C", "B", "A", "S"]
-    return order.indexOf(userRank) >= order.indexOf(requiredRank)
-  }
+    const order: RankTier[] = ["E", "D", "C", "B", "A", "S"];
+    return order.indexOf(userRank) >= order.indexOf(requiredRank);
+  };
 
-  const getUserRewards = (userId: string) => userRewards.filter((r) => r.userId === userId)
-  const getUserAchievements = (userId: string) => userAchievements.filter((a) => a.userId === userId)
+  const getUserRewards = (userId: string) => userRewards.filter((r) => r.userId === userId);
+  const getUserAchievements = (userId: string) => userAchievements.filter((a) => a.userId === userId);
+
   const getAvailableRewards = (userId: string): RewardItem[] => {
-    const user = userRankings.find((u) => u.userId === userId)
-    if (!user) return []
+    const user = userRankings.find((u) => u.userId === userId);
+    if (!user) return [];
     return REWARD_CATALOG.filter((reward) => {
-      if (!reward.available) return false
-      if (reward.requiredRank && !isRankHigherOrEqual(user.rank, reward.requiredRank)) return false
+      if (!reward.available) return false;
+      if (reward.requiredRank && !isRankHigherOrEqual(user.rank, reward.requiredRank)) return false;
       if (reward.limitedQuantity) {
-        const redeemedCount = userRewards.filter((ur) => ur.rewardId === reward.id).length
-        if (redeemedCount >= reward.limitedQuantity) return false
+        const redeemedCount = userRewards.filter((ur) => ur.rewardId === reward.id).length;
+        if (redeemedCount >= reward.limitedQuantity) return false;
       }
-      return true
-    })
-  }
+      return true;
+    });
+  };
 
-  const getUserRanking = (userId: string) => userRankings.find((u) => u.userId === userId)
+  const getUserRanking = (userId: string) => userRankings.find((u) => u.userId === userId);
   const getLeaderboard = (limit?: number) =>
-    limit ? userRankings.slice(0, limit) : userRankings
-  const getRankBenefits = (rank: RankTier) => RANK_CONFIGS[rank].benefits
-  const getWeeklyRequirement = (rank: RankTier) => RANK_CONFIGS[rank].weeklyRequirement || 0
+    limit ? userRankings.slice(0, limit) : userRankings;
+  const getRankBenefits = (rank: RankTier) => RANK_CONFIGS[rank].benefits;
+  const getWeeklyRequirement = (rank: RankTier) => RANK_CONFIGS[rank].weeklyRequirement || 0;
   const isRankAtRisk = (user: UserRanking) => {
-    const requirement = getWeeklyRequirement(user.rank)
-    return requirement > 0 && user.weeklyPoints < requirement
-  }
+    const requirement = getWeeklyRequirement(user.rank);
+    return requirement > 0 && user.weeklyPoints < requirement;
+  };
 
   return {
     userRankings,
@@ -340,6 +225,7 @@ export function useRanking() {
     getUserRanking,
     getLeaderboard,
     calculateRank,
+    calculateRankProgress,
     getRankBenefits,
     getWeeklyRequirement,
     isRankAtRisk,
@@ -351,5 +237,5 @@ export function useRanking() {
     RANK_CONFIGS,
     REWARD_CATALOG,
     ACHIEVEMENTS,
-  }
+  };
 }

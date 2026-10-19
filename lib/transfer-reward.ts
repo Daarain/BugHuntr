@@ -1,64 +1,31 @@
-import { db } from "@/firebaseConfig";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  addDoc,
-  doc,
-  getDoc,
-  runTransaction,
-  serverTimestamp,
-} from "firebase/firestore";
+/**
+ * Transfer Reward Helper (MongoDB Implementation)
+ *
+ * Transfers bounty rewards from organization wallet to hunter points/earnings,
+ * creating an immutable payout record and audit trail with atomic consistency.
+ */
 
-type UserProfileRef = {
-  ref: ReturnType<typeof doc>;
-};
+import { getMongoClient, getMongoDatabase } from "@/lib/db/mongodb";
+import { WalletsRepository } from "@/lib/db/repositories/wallets.repo";
+import { PayoutsRepository } from "@/lib/db/repositories/payouts.repo";
+import { GamificationRepository } from "@/lib/db/repositories/gamification.repo";
 
-const DEFAULT_ADMIN_START_BALANCE = 10000;
+// Server-only database execution guard
+if (typeof window !== "undefined") {
+  throw new Error("lib/transfer-reward.ts is a server-only module and cannot be executed in the browser.");
+}
+
 const DEFAULT_ORG_WALLET_ID = "demo_org_001";
 
-async function getUserProfileRefByUsername(
-  username: string
-): Promise<UserProfileRef | null> {
-  if (!username) return null;
-  const q = query(
-    collection(db, "userProfiles"),
-    where("username", "==", username)
-  );
-  const snapshot = await getDocs(q);
-  if (snapshot.empty) return null;
-  const userDoc = snapshot.docs[0];
-  return { ref: doc(db, "userProfiles", userDoc.id) };
-}
-
-async function ensureUserProfile(
-  username: string,
-  startingPoints: number
-): Promise<UserProfileRef | null> {
-  const existing = await getUserProfileRefByUsername(username);
-  if (existing) return existing;
-
-  const docRef = await addDoc(collection(db, "userProfiles"), {
-    username,
-    points: 0,
-    walletBalance: startingPoints,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
-
-  return { ref: doc(db, "userProfiles", docRef.id) };
-}
-
-type TransferRewardParams = {
+export interface TransferRewardParams {
   adminUsername: string;
   hunterUsername: string;
-  hunterUid: string;
+  hunterUid: string; // Foreign reference to SQL auth_users.id (string)
   huntId: string;
   submissionId: string;
   amount: number;
   orgWalletId?: string;
-};
+}
 
 export async function transferRewardFromAdmin({
   adminUsername,
@@ -68,74 +35,182 @@ export async function transferRewardFromAdmin({
   submissionId,
   amount,
   orgWalletId = DEFAULT_ORG_WALLET_ID,
-}: TransferRewardParams) {
+}: TransferRewardParams): Promise<boolean> {
   if (!adminUsername || !hunterUsername || amount <= 0) {
     throw new Error("Invalid transfer request");
   }
 
-  const orgWalletRef = doc(db, "org_wallets", orgWalletId);
-  const orgWalletSnap = await getDoc(orgWalletRef);
-  if (!orgWalletSnap.exists()) {
+  const client = await getMongoClient();
+  const db = await getMongoDatabase();
+
+  const walletsRepo = new WalletsRepository(db);
+  const payoutsRepo = new PayoutsRepository(db);
+  const gamificationRepo = new GamificationRepository(db);
+
+  // Micro-units calculation (1 token/currency = 1,000,000 micro-units)
+  const payoutAmountMicro = Math.floor(amount * 1000000);
+
+  // Check org wallet existence
+  let orgWallet = await walletsRepo.getWallet(orgWalletId);
+  if (!orgWallet && orgWalletId === DEFAULT_ORG_WALLET_ID) {
+    orgWallet = await walletsRepo.createWallet({
+      org_id: DEFAULT_ORG_WALLET_ID,
+      balance: 10000000000,
+      reserved: 0,
+      currency: "INR",
+      network: "INTERNAL",
+    });
+  }
+  if (!orgWallet) {
     throw new Error("Org wallet not found");
   }
 
-  const adminProfile = await ensureUserProfile(
-    adminUsername,
-    DEFAULT_ADMIN_START_BALANCE
-  );
-  const hunterProfile = await ensureUserProfile(hunterUsername, 0);
+  // Attempt execution within a multi-document ACID transaction if replica set supports it
+  let session;
+  let useTransaction = false;
 
-  if (!adminProfile || !hunterProfile) {
-    throw new Error("User profile not found");
+  try {
+    session = client.startSession();
+    // Test if transactions are supported by starting one
+    session.startTransaction();
+    useTransaction = true;
+  } catch {
+    // Standalone instances don't support sessions/transactions; fallback to atomic conditional updates
+    session = undefined;
+    useTransaction = false;
   }
 
-  const timestamp = new Date().toISOString();
-
-  const payoutAmountMicro = Math.floor(amount * 1000000);
-
-  await runTransaction(db, async (transaction) => {
-    const orgWalletTxnSnap = await transaction.get(orgWalletRef);
-    const adminSnap = await transaction.get(adminProfile.ref);
-    const hunterSnap = await transaction.get(hunterProfile.ref);
-
-    if (!orgWalletTxnSnap.exists() || !adminSnap.exists() || !hunterSnap.exists()) {
-      throw new Error("User profile not found");
-    }
-
-    const orgBalance = orgWalletTxnSnap.data().balance || 0;
-    const hunterBalance = hunterSnap.data().walletBalance || 0;
-
-    if (orgBalance < payoutAmountMicro) {
-      throw new Error("Insufficient org wallet balance");
-    }
-
-    transaction.update(orgWalletRef, {
-      balance: orgBalance - payoutAmountMicro,
-      updatedAt: timestamp,
-    });
-    transaction.update(hunterProfile.ref, {
-      walletBalance: hunterBalance + amount,
-      updatedAt: timestamp,
-    });
-  });
-
   const payoutOrderId = `BH-PAYOUT-${submissionId}-${Date.now()}`;
-  await addDoc(collection(db, "payouts"), {
-    order_id: payoutOrderId,
-    orgId: orgWalletId,
-    huntId,
-    submissionId,
-    hunterUid,
-    hunterWallet: "",
-    amount: payoutAmountMicro,
-    currency: "INR",
-    network: "INTERNAL",
-    status: "completed",
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    createdBy: adminUsername,
-    payoutSource: "org_wallets",
-  });
 
-  return true;
+  try {
+    if (useTransaction && session) {
+      // 1. Reserve funds atomically under transaction
+      const reserveResult = await walletsRepo.reserveFunds(orgWalletId, payoutAmountMicro, session);
+      if (!reserveResult.success) {
+        throw new Error(reserveResult.error?.includes("Insufficient") ? "Insufficient org wallet balance" : "Org wallet not found");
+      }
+
+      // 2. Complete deduction
+      await walletsRepo.completeDeduction(orgWalletId, payoutAmountMicro, session);
+
+      // 3. Award hunter points / earnings in gamification collection
+      await gamificationRepo.addPoints(
+        hunterUid,
+        amount,
+        {
+          username: hunterUsername,
+          reason: `Bounty reward for submission ${submissionId}`,
+          bugId: submissionId,
+        },
+        session
+      );
+
+      // 4. Create payout record
+      await payoutsRepo.createPayout(
+        {
+          _id: payoutOrderId,
+          order_id: payoutOrderId,
+          huntId,
+          submissionId,
+          orgId: orgWalletId,
+          hunterUid,
+          hunterWallet: "",
+          amount: payoutAmountMicro,
+          currency: "INR",
+          network: "INTERNAL",
+          status: "completed",
+          createdBy: adminUsername,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        session
+      );
+
+      // 5. Append audit log
+      await payoutsRepo.logEvent(
+        {
+          order_id: payoutOrderId,
+          eventType: "reward_transferred_from_admin",
+          actorUid: adminUsername,
+          data: {
+            hunterUid,
+            hunterUsername,
+            amount: payoutAmountMicro,
+            submissionId,
+            orgWalletId,
+          },
+        },
+        session
+      );
+
+      await session.commitTransaction();
+    } else {
+      // Standalone Fallback: Atomic conditional update pipeline
+      const reserveResult = await walletsRepo.reserveFunds(orgWalletId, payoutAmountMicro);
+      if (!reserveResult.success) {
+        throw new Error(reserveResult.error?.includes("Insufficient") ? "Insufficient org wallet balance" : "Org wallet not found");
+      }
+
+      // Complete deduction
+      await walletsRepo.completeDeduction(orgWalletId, payoutAmountMicro);
+
+      // Award hunter points / earnings
+      await gamificationRepo.addPoints(hunterUid, amount, {
+        username: hunterUsername,
+        reason: `Bounty reward for submission ${submissionId}`,
+        bugId: submissionId,
+      });
+
+      // Create payout record
+      await payoutsRepo.createPayout({
+        _id: payoutOrderId,
+        order_id: payoutOrderId,
+        huntId,
+        submissionId,
+        orgId: orgWalletId,
+        hunterUid,
+        hunterWallet: "",
+        amount: payoutAmountMicro,
+        currency: "INR",
+        network: "INTERNAL",
+        status: "completed",
+        createdBy: adminUsername,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      // Log event
+      await payoutsRepo.logEvent({
+        order_id: payoutOrderId,
+        eventType: "reward_transferred_from_admin",
+        actorUid: adminUsername,
+        data: {
+          hunterUid,
+          hunterUsername,
+          amount: payoutAmountMicro,
+          submissionId,
+          orgWalletId,
+        },
+      });
+    }
+
+    return true;
+  } catch (err) {
+    if (useTransaction && session) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        // ignore secondary abort errors
+      }
+    }
+    throw err;
+  } finally {
+    if (session) {
+      try {
+        await session.endSession();
+      } catch {
+        // ignore
+      }
+    }
+  }
 }

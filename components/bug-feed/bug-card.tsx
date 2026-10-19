@@ -8,8 +8,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useAuth } from "@/components/auth/auth-context";
-import { db } from "@/firebaseConfig";
-import { doc, deleteDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -82,7 +80,13 @@ export function BugCard({ bug, className, index = 0 }: BugCardProps) {
     )
       return;
     try {
-      await deleteDoc(doc(db, "bugs", bug.id.toString()));
+      const res = await fetch(`/api/bug-submissions/${bug.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error("Failed to delete bug");
+      }
       window.location.reload();
     } catch (err) {
       alert("Failed to delete bug. Try again.");

@@ -8,14 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Sparkles, Mail, TrendingUp, Award, Shield } from "lucide-react";
 import { type ProRecommendation } from "@/types/pro";
 import { toast } from "sonner";
-import { db } from "@/firebaseConfig";
-import {
-  collection,
-  onSnapshot,
-  query,
-  where,
-  addDoc,
-} from "firebase/firestore";
 import {
   calculateHunterScore,
   checkEligibility,
@@ -59,109 +51,112 @@ export function ProRecommendationsPanel({
   useEffect(() => {
     setLoading(true);
 
-    const unsubscribe = onSnapshot(
-      collection(db, "userProfiles"),
-      (snapshot) => {
-        const allHunters = snapshot.docs.map((docSnap) => {
-          const data = docSnap.data() as Record<string, unknown>;
-          const hunterName =
-            (data.username as string) ||
-            (data.name as string) ||
-            (data.email as string) ||
-            "Hunter";
-          const hunterUsername = (data.username as string) || hunterName;
-          const rank = (data.rank as string) || "C";
-          const huntsParticipated =
-            (data.huntsParticipated as number) ||
-            (data.bugsSubmitted as number) ||
-            0;
-          const certifications = Array.isArray(data.certifications)
-            ? (data.certifications as string[])
-            : [];
-          const reputation = (data.reputation as number) || 0;
-          const successRate = (data.successRate as number) || 0;
+    const fetchHunters = async () => {
+      try {
+        const res = await fetch("/api/rankings/leaderboard?limit=200");
+        if (res.ok) {
+          const payload = await res.json();
+          const items = Array.isArray(payload?.leaderboard) ? payload.leaderboard : [];
+          const allHunters = items.map((data: any) => {
+            const hunterName =
+              data.username || data.name || data.email || "Hunter";
+            const hunterUsername = data.username || hunterName;
+            const rank = data.rank || "C";
+            const huntsParticipated =
+              data.huntsParticipated || data.bugsSubmitted || 0;
+            const certifications = Array.isArray(data.certifications)
+              ? data.certifications
+              : [];
+            const reputation = data.reputation || 0;
+            const successRate = data.successRate || 0;
 
-          const eligibility = checkEligibility(
-            rank,
-            huntsParticipated,
-            certifications,
-            minRank,
-            minHunts,
-            requiredCerts,
-          );
+            const eligibility = checkEligibility(
+              rank,
+              huntsParticipated,
+              certifications,
+              minRank,
+              minHunts,
+              requiredCerts
+            );
 
-          const score = calculateHunterScore(
-            rank,
-            reputation,
-            huntsParticipated,
-            successRate,
-            certifications,
-            requiredCerts,
-          );
+            const score = calculateHunterScore(
+              rank,
+              reputation,
+              huntsParticipated,
+              successRate,
+              certifications,
+              requiredCerts
+            );
 
-          const reasonTags = generateReasonTags(
-            rank,
-            reputation,
-            huntsParticipated,
-            successRate,
-            certifications,
-            requiredCerts,
-          );
+            const reasonTags = generateReasonTags(
+              rank,
+              reputation,
+              huntsParticipated,
+              successRate,
+              certifications,
+              requiredCerts
+            );
 
-          return {
-            hunterId: docSnap.id,
-            hunterName,
-            hunterUsername,
-            score,
-            rank,
-            reputation,
-            huntsParticipated,
-            successRate,
-            certifications,
-            reasonTags,
-            matchPercentage: Math.round(score),
-            isEligible: eligibility.isEligible,
-            missingRequirements: eligibility.missingRequirements,
-          };
-        });
+            return {
+              hunterId: data.id || data.userId,
+              hunterName,
+              hunterUsername,
+              score,
+              rank,
+              reputation,
+              huntsParticipated,
+              successRate,
+              certifications,
+              reasonTags,
+              matchPercentage: Math.round(score),
+              isEligible: eligibility.isEligible,
+              missingRequirements: eligibility.missingRequirements,
+            };
+          });
 
-        setRecommendations(allHunters);
-        setLoading(false);
-      },
-      () => {
+          setRecommendations(allHunters);
+        }
+      } catch (err) {
+        console.error("Failed to fetch hunters for recommendations:", err);
         setRecommendations([]);
+      } finally {
         setLoading(false);
-      },
-    );
+      }
+    };
 
-    return () => unsubscribe();
+    fetchHunters();
   }, [minRank, minHunts, requiredCerts]);
 
   useEffect(() => {
+    let mounted = true;
     if (!huntId) {
       setInvitedHunterIds(new Set());
       return;
     }
 
-    const invitesQuery = query(
-      collection(db, "proInvitations"),
-      where("huntId", "==", huntId),
-      where("status", "in", ["pending", "accepted"]),
-    );
-
-    const unsubscribe = onSnapshot(invitesQuery, (snapshot) => {
-      const next = new Set<string>();
-      snapshot.docs.forEach((docSnap) => {
-        const data = docSnap.data() as Record<string, unknown>;
-        const hunterId = data.hunterId as string | undefined;
-        if (hunterId) {
-          next.add(hunterId);
+    async function loadInvitations() {
+      try {
+        const res = await fetch(`/api/pro/invitations?huntId=${encodeURIComponent(huntId)}&status=pending,accepted`, {
+          credentials: "include",
+        });
+        if (res.ok && mounted) {
+          const data = await res.json();
+          const list = Array.isArray(data?.invitations) ? data.invitations : [];
+          const next = new Set<string>();
+          list.forEach((inv: any) => {
+            if (inv.hunterId) next.add(inv.hunterId);
+          });
+          setInvitedHunterIds(next);
         }
-      });
-      setInvitedHunterIds(next);
-    });
+      } catch (err) {
+        console.error("Failed to load invitations for recommendations:", err);
+      }
+    }
 
-    return () => unsubscribe();
+    loadInvitations();
+    return () => {
+      mounted = false;
+    };
   }, [huntId]);
 
   const handleInvite = async (
@@ -171,26 +166,30 @@ export function ProRecommendationsPanel({
   ) => {
     setInviting(hunterId);
     try {
-      await addDoc(collection(db, "proInvitations"), {
-        huntId,
-        huntTitle,
-        companyName,
-        hunterId,
-        hunterName,
-        hunterUsername: hunterUsername || hunterName,
-        token: `inv_${Date.now()}_${hunterId}`,
-        invitedBy: user?.email || user?.username || "admin",
-        status: "pending",
-        invitedAt: new Date().toISOString(),
-        expiresAt: new Date(
-          Date.now() + 14 * 24 * 60 * 60 * 1000,
-        ).toISOString(),
+      const res = await fetch("/api/pro/invitations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          huntId,
+          huntTitle,
+          companyName,
+          hunterId,
+          hunterName,
+          hunterUsername: hunterUsername || hunterName,
+        }),
       });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || "Failed to send invitation");
+      }
+
       setInvitedHunterIds((prev) => new Set(prev).add(hunterId));
       toast.success(`Invitation sent to ${hunterName}`);
       onInvite?.(hunterId, hunterName);
-    } catch (error) {
-      toast.error("Failed to send invitation");
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to send invitation");
     } finally {
       setInviting(null);
     }
@@ -366,7 +365,7 @@ export function ProRecommendationsPanel({
                               Missing requirements:
                             </p>
                             <div className="flex flex-wrap gap-2">
-                              {rec.missingRequirements.map((item, i) => (
+                              {rec.missingRequirements.map((item: string, i: number) => (
                                 <Badge
                                   key={`${rec.hunterId}-missing-${i}`}
                                   variant="outline"

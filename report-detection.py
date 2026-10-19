@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
-from paddleocr import PaddleOCR
 from pdf2image import convert_from_path
 import tempfile
 import re
@@ -12,8 +11,15 @@ import json
 from PIL import Image
 from PIL.ExifTags import TAGS
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.util import connection as urllib3_connection
 import base64
 import mimetypes
+import urllib.parse
+import socket
+import ipaddress
 from groq import Groq
 
 load_dotenv()
@@ -33,19 +39,27 @@ CORS(
 )
 
 # -------------------------
-# OCR Setup
+# OCR Setup (lazy initialization)
 # -------------------------
-ocr = PaddleOCR(
-	use_doc_orientation_classify=False,
-	use_doc_unwarping=False,
-	use_textline_orientation=False,
-	lang="en",
-)
+_ocr = None
+
+
+def get_ocr():
+	global _ocr
+	if _ocr is None:
+		from paddleocr import PaddleOCR
+		_ocr = PaddleOCR(
+			use_doc_orientation_classify=False,
+			use_doc_unwarping=False,
+			use_textline_orientation=False,
+			lang="en",
+		)
+	return _ocr
 
 # -------------------------
 # Allowed file extensions
 # -------------------------
-ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "pdf"}
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "pdf", "webp"}
 
 # -------------------------
 # Configuration
@@ -111,7 +125,7 @@ DEPLOYMENT_INDICATORS = [
 def extract_text_from_image(image_path):
 	"""Extract text using PaddleOCR predict method"""
 	try:
-		result = ocr.predict(image_path)
+		result = get_ocr().predict(image_path)
 
 		if not result:
 			return ""
@@ -418,35 +432,235 @@ def is_allowed_file(filename):
 	return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024  # 10MB limit
+ALLOWED_MIME_TYPES = {
+	"image/jpeg",
+	"image/jpg",
+	"image/png",
+	"image/webp",
+	"application/pdf",
+}
+
+
+def is_safe_ip(ip_str):
+	"""Check if an IP address string is a safe, publicly routable address."""
+	try:
+		ip = ipaddress.ip_address(ip_str)
+		# Unwrap IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
+		if getattr(ip, "ipv4_mapped", None):
+			ip = ip.ipv4_mapped
+		if (
+			ip.is_loopback
+			or ip.is_private
+			or ip.is_link_local
+			or ip.is_multicast
+			or ip.is_reserved
+			or ip.is_unspecified
+		):
+			return False
+		# Check explicit cloud metadata and special range addresses
+		if str(ip) in {"169.254.169.254", "169.254.170.2", "fd00:ec2::254"}:
+			return False
+		return True
+	except ValueError:
+		return False
+
+
+class PinnedIPAdapter(HTTPAdapter):
+	"""
+	Transport adapter that pins socket connections directly to a validated IP address.
+	Eliminates Time-of-Check to Time-of-Use (TOCTOU) DNS rebinding vulnerabilities
+	while preserving SNI, TLS handshake, and certificate hostname verification.
+	"""
+	def __init__(self, pinned_ip, *args, **kwargs):
+		self.pinned_ip = pinned_ip
+		super().__init__(*args, **kwargs)
+
+	def _patch_connection_pool(self, conn):
+		pinned_ip = self.pinned_ip
+
+		class SpecificHTTPSConnection(HTTPSConnection):
+			def _new_conn(self):
+				return urllib3_connection.create_connection(
+					(pinned_ip, self.port),
+					self.timeout,
+					source_address=self.source_address,
+					socket_options=self.socket_options,
+				)
+
+		class SpecificHTTPConnection(HTTPConnection):
+			def _new_conn(self):
+				return urllib3_connection.create_connection(
+					(pinned_ip, self.port),
+					self.timeout,
+					source_address=self.source_address,
+					socket_options=self.socket_options,
+				)
+
+		if isinstance(conn, HTTPSConnectionPool):
+			conn.ConnectionCls = SpecificHTTPSConnection
+		else:
+			conn.ConnectionCls = SpecificHTTPConnection
+		return conn
+
+	def get_connection(self, url, proxies=None):
+		conn = super().get_connection(url, proxies=proxies)
+		return self._patch_connection_pool(conn)
+
+	def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):
+		conn = super().get_connection_with_tls_context(request, verify, proxies=proxies, cert=cert)
+		return self._patch_connection_pool(conn)
+
+
+def validate_remote_url(url):
+	"""Validate that a URL uses http/https and resolves only to safe public IPs. Returns (parsed_url, pinned_ip)."""
+	parsed = urllib.parse.urlparse(url)
+	if parsed.scheme.lower() not in ("http", "https"):
+		raise ValueError(f"Unsupported scheme '{parsed.scheme}'. Only HTTP and HTTPS are allowed.")
+
+	hostname = parsed.hostname
+	if not hostname:
+		raise ValueError("Invalid URL: hostname is required.")
+
+	# Check if hostname itself is an IP literal
+	try:
+		ip = ipaddress.ip_address(hostname)
+		if not is_safe_ip(str(ip)):
+			raise ValueError(f"Restricted IP address target: {hostname}")
+		return parsed, str(ip)
+	except ValueError:
+		# Hostname is a domain name, resolve via DNS
+		pass
+
+	port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+	try:
+		addr_info = socket.getaddrinfo(hostname, port, family=socket.AF_UNSPEC, proto=socket.IPPROTO_TCP)
+	except socket.gaierror as e:
+		raise ValueError(f"DNS resolution failed for hostname '{hostname}': {e}")
+
+	if not addr_info:
+		raise ValueError(f"No IP addresses resolved for hostname '{hostname}'.")
+
+	resolved_ips = []
+	for entry in addr_info:
+		resolved_ip = entry[4][0]
+		if not is_safe_ip(resolved_ip):
+			raise ValueError(f"Access to resolved IP '{resolved_ip}' is restricted.")
+		resolved_ips.append(resolved_ip)
+
+	return parsed, resolved_ips[0]
+
+
+def validate_magic_bytes(data):
+	"""Verify data starts with allowed image or PDF signatures."""
+	if data.startswith(b"\x89PNG\r\n\x1a\n"):
+		return "png"
+	if data.startswith(b"\xff\xd8\xff"):
+		return "jpg"
+	if data.startswith(b"%PDF"):
+		return "pdf"
+	if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+		return "webp"
+	return None
+
+
 def _download_to_temp(url, temp_dir):
-	"""Download a URL or data URL to a temp file and return its path."""
+	"""Securely download a URL or data URL to a temp file with SSRF and DNS rebinding mitigations."""
+	if not url or not isinstance(url, str):
+		raise ValueError("Invalid screenshot URL")
+
+	url = url.strip()
+
 	if url.startswith("data:"):
-		header, b64_data = url.split(",", 1)
-		match = re.search(r"data:([^;]+);base64", header)
-		mime = match.group(1) if match else "image/png"
-		ext = mime.split("/")[-1]
-		filename = f"upload.{ext}"
+		match = re.match(
+			r"^data:(image\/(?:png|jpeg|jpg|webp)|application\/pdf);base64,(.+)$",
+			url,
+			re.IGNORECASE | re.DOTALL,
+		)
+		if not match:
+			raise ValueError("Invalid or disallowed data URL format.")
+
+		mime = match.group(1).lower()
+		b64_data = match.group(2)
+		if len(b64_data) > MAX_DOWNLOAD_BYTES * 2:
+			raise ValueError("Data URL payload exceeds maximum allowed size.")
+
+		try:
+			decoded_bytes = base64.b64decode(b64_data, validate=True)
+		except Exception as e:
+			raise ValueError(f"Invalid base64 payload in data URL: {e}")
+
+		if len(decoded_bytes) > MAX_DOWNLOAD_BYTES:
+			raise ValueError("Decoded file exceeds maximum size limit of 10MB.")
+
+		detected_ext = validate_magic_bytes(decoded_bytes)
+		if not detected_ext:
+			raise ValueError("Data URL content magic bytes do not match allowed image or PDF types.")
+
+		filename = f"upload.{detected_ext}"
 		file_path = os.path.join(temp_dir, filename)
 		with open(file_path, "wb") as f:
-			f.write(base64.b64decode(b64_data))
+			f.write(decoded_bytes)
 		return file_path, filename
 
-	response = requests.get(url, timeout=15)
-	response.raise_for_status()
+	# Validate remote URL and DNS resolution against SSRF, obtaining pinned IP
+	parsed, pinned_ip = validate_remote_url(url)
 
-	content_type = response.headers.get("Content-Type", "")
-	ext = "png"
-	if "pdf" in content_type:
-		ext = "pdf"
-	elif "jpeg" in content_type:
-		ext = "jpg"
-	elif "png" in content_type:
-		ext = "png"
+	session = requests.Session()
+	session.trust_env = False  # Ignore system proxies (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY)
+	adapter = PinnedIPAdapter(pinned_ip)
+	session.mount("https://", adapter)
+	session.mount("http://", adapter)
 
-	filename = f"download.{ext}"
+	# Fetch with redirects disabled and strict timeouts using pinned transport
+	try:
+		response = session.get(
+			url,
+			timeout=(5, 10),
+			allow_redirects=False,
+			stream=True,
+			headers={"User-Agent": "BugHuntr-Security-Scanner/1.0"},
+		)
+	except requests.RequestException as e:
+		raise ValueError(f"Failed to fetch remote screenshot: {e}")
+
+	if response.status_code in (301, 302, 303, 307, 308):
+		raise ValueError("Redirects are disallowed for security.")
+
+	if response.status_code != 200:
+		raise ValueError(f"Remote server returned HTTP {response.status_code}.")
+
+	# Verify Content-Type
+	content_type_header = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+	if content_type_header and content_type_header not in ALLOWED_MIME_TYPES:
+		raise ValueError(f"Disallowed Content-Type '{content_type_header}'.")
+
+	# Enforce size limits via Content-Length if present
+	content_length = response.headers.get("Content-Length")
+	if content_length and content_length.isdigit() and int(content_length) > MAX_DOWNLOAD_BYTES:
+		raise ValueError("Content-Length exceeds maximum allowed size of 10MB.")
+
+	# Stream download and enforce byte limit
+	downloaded_bytes = bytearray()
+	for chunk in response.iter_content(chunk_size=65536):
+		if chunk:
+			downloaded_bytes.extend(chunk)
+			if len(downloaded_bytes) > MAX_DOWNLOAD_BYTES:
+				raise ValueError("Downloaded file exceeds maximum allowed size of 10MB.")
+
+	if len(downloaded_bytes) == 0:
+		raise ValueError("Downloaded file is empty.")
+
+	# Validate magic bytes
+	detected_ext = validate_magic_bytes(bytes(downloaded_bytes[:64]))
+	if not detected_ext:
+		raise ValueError("Downloaded file does not match allowed signatures (PNG, JPEG, PDF, WEBP).")
+
+	filename = f"download.{detected_ext}"
 	file_path = os.path.join(temp_dir, filename)
 	with open(file_path, "wb") as f:
-		f.write(response.content)
+		f.write(downloaded_bytes)
+
 	return file_path, filename
 
 
@@ -754,6 +968,8 @@ def analyze_bug_screenshot():
 				}
 			)
 
+	except ValueError as ve:
+		return jsonify({"error": f"Invalid screenshot input: {str(ve)}"}), 400
 	except Exception as ex:
 		return jsonify({"error": f"Analysis failed: {str(ex)}"}), 500
 

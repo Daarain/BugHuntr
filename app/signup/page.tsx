@@ -29,10 +29,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useAuth } from "@/components/auth/auth-context"
-import { db } from "@/firebaseConfig"
-import { collection, addDoc } from "firebase/firestore"
-import { createUserProfile } from "@/lib/user-profile"
-import bcrypt from "bcryptjs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Textarea } from "@/components/ui/textarea"
 import { AlertCircle } from "lucide-react"
@@ -45,18 +41,19 @@ export default function SignUpPage() {
   const [isCheckingUsername, setIsCheckingUsername] = useState(false)
   const [usernameChecked, setUsernameChecked] = useState(false)
 
-  // Async check for username uniqueness
+  // Async check for username uniqueness via server API
   const checkUsernameUnique = async (username: string) => {
     if (!username || username.length < 3) return false;
     setIsCheckingUsername(true);
     try {
-      const q = await import("firebase/firestore");
-      const { getDocs, query, collection, where } = q;
-      const snapshot = await getDocs(query(collection(db, "userProfiles"), where("username", "==", username)));
+      const res = await fetch(`/api/user/profile?username=${encodeURIComponent(username)}`, {
+        credentials: "include",
+      });
       setIsCheckingUsername(false);
       setUsernameChecked(true);
-      return snapshot.empty;
-    } catch (err) {
+      // Status 404 indicates the username is not taken and available
+      return res.status === 404;
+    } catch {
       setIsCheckingUsername(false);
       setUsernameChecked(false);
       return false;
@@ -251,42 +248,31 @@ export default function SignUpPage() {
     }
 
     try {
-      // Hash password using bcrypt
-      const hashedPassword = await bcrypt.hash(formData.password, 10);
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          username: formData.username,
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
+          userType: userType === "admin" ? "company" : userType,
+          companyName: formData.companyName,
+        }),
+      });
 
-      // Create user profile in Firestore (Firestore registration only - no Firebase Auth)
-      const userProfile: any = {
-        username: formData.username,
-        name: formData.name,
-        email: formData.email,
-        password: hashedPassword, // Store hashed password in Firestore
-        userType,
-        adminType: adminType || null,
-        phone: formData.phone || null,
-        createdAt: new Date(),
-        verified: false,
-        points: 0,
-      };
+      const data = await res.json().catch(() => null);
 
-
-      // Add type-specific fields
-      if (adminType === "company" || adminType === "firm") {
-        userProfile.companyName = formData.companyName;
-        userProfile.registrationNumber = formData.registrationNumber;
-        userProfile.businessPhone = formData.businessPhone;
-        userProfile.address = formData.address;
-      } else if (adminType === "student") {
-        userProfile.instituteName = formData.instituteName;
-        userProfile.studentId = formData.studentId;
-        userProfile.projectName = formData.projectName || null;
-      } else if (adminType === "individual") {
-        userProfile.projectStartupName = formData.projectStartupName || null;
+      if (!res.ok) {
+        setErrors((prev) => ({
+          ...prev,
+          general: data?.error || "Registration failed. Please try again.",
+        }));
+        setIsLoading(false);
+        return;
       }
 
-      // Save profile to Firestore only
-      await addDoc(collection(db, "users"), userProfile);
-      await addDoc(collection(db, "userProfiles"), userProfile);
-      // Show success message
       setEmailSent(true);
       setErrors({});
     } catch (error: any) {

@@ -7,14 +7,6 @@ import { FilterControls } from "@/components/bug-feed/filter-controls";
 import { BugCardSkeleton } from "@/components/loading/bug-card-skeleton";
 import { FadeIn } from "@/components/animations/fade-in";
 import React, { useState, useMemo, useEffect } from "react";
-import {
-  collection,
-  getDocs,
-  onSnapshot,
-  limit,
-  query,
-} from "firebase/firestore";
-import { db } from "@/firebaseConfig";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TrendingUp, Shield, Users, Award } from "lucide-react";
@@ -42,32 +34,43 @@ export default function BugFeedPage() {
   const { getActiveBugHunts } = useBugHunt();
   const activeBugHunts = getActiveBugHunts() || [];
 
-  // Real-time updates for bugs from Firestore - limit to 50 bugs initially
+  // Load submissions from API
   useEffect(() => {
-    const bugsQuery = query(collection(db, "bugs"), limit(50));
-    const unsubscribe = onSnapshot(bugsQuery, (querySnapshot) => {
-      const bugs = querySnapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          title: data.title,
-          severity: data.severity,
-          category: data.category || "Web Application",
-          company: data.company || "Unknown",
-          summary: data.description || data.impact || "No summary provided.",
-          postedTime: data.postedTime || data.submittedAt || "",
-          date: data.submittedAt,
-          isLocked: false,
-          author: data.submittedBy,
-          email: data.email || "",
-          bounty: 0,
-          views: 0,
-          status: data.status || "pending",
-        };
-      });
-      setAllBugs(bugs);
-    });
-    return () => unsubscribe();
+    let mounted = true;
+    const fetchBugs = async () => {
+      try {
+        setIsLoading(true);
+        const res = await fetch("/api/bug-submissions", { credentials: "include" });
+        if (res.ok && mounted) {
+          const data = await res.json();
+          const bugs = (Array.isArray(data) ? data : []).map((b: any) => ({
+            id: b.id,
+            title: b.title,
+            severity: b.severity,
+            category: b.category || "Web Application",
+            company: b.company || "Unknown",
+            summary: b.description || "No summary provided.",
+            postedTime: b.submittedAt || "",
+            date: b.submittedAt,
+            isLocked: false,
+            author: b.username || b.userId,
+            email: "",
+            bounty: 0,
+            views: 0,
+            status: b.status || "pending",
+          }));
+          setAllBugs(bugs);
+        }
+      } catch (err) {
+        console.error("Failed to load bugs for feed:", err);
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
+    };
+    fetchBugs();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // Reset severity filter if user loses admin access or company info

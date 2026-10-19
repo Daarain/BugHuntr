@@ -36,20 +36,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    let isMounted = true;
 
-    // In development we may want a fresh state, but don't forcibly clear stored user here.
-    const authStatus = localStorage.getItem("isAuthenticated");
-    const userData = localStorage.getItem("currentUser");
-    setIsAuthenticated(authStatus === "true");
-    if (userData) {
+    async function checkSession() {
       try {
-        setUser(JSON.parse(userData));
-      } catch (e) {
+        const res = await fetch("/api/auth/me", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (data?.authenticated && data?.user && isMounted) {
+            setIsAuthenticated(true);
+            setUser(data.user);
+            setIsLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error("Session verification failed:", err);
+      }
+
+      if (isMounted) {
+        setIsAuthenticated(false);
         setUser(null);
+        setIsLoading(false);
       }
     }
-    setIsLoading(false);
+
+    checkSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const login = (
@@ -61,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ) => {
     const displayUsername = getDisplayUsername(username, email);
     const userData: User = {
-      id: displayUsername,
+      id: additionalData?.id || displayUsername,
       username: displayUsername,
       email,
       role,
@@ -70,18 +86,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     setIsAuthenticated(true);
     setUser(userData);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("isAuthenticated", "true");
-      localStorage.setItem("currentUser", JSON.stringify(userData));
-    }
   };
 
-  const logout = () => {
-    setIsAuthenticated(false);
-    setUser(null);
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("isAuthenticated");
-      localStorage.removeItem("currentUser");
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    } catch (err) {
+      console.error("Logout request failed:", err);
+    } finally {
+      setIsAuthenticated(false);
+      setUser(null);
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("isAuthenticated");
+        localStorage.removeItem("currentUser");
+      }
     }
   };
 

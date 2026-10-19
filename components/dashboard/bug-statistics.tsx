@@ -10,8 +10,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertCircle, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
 import { useAuth } from "@/components/auth/auth-context";
 
 interface BugStatistics {
@@ -86,44 +84,18 @@ export function BugStatistics() {
       try {
         setLoading(true);
 
-        // Fetch direct bug reports (contains target organization)
-        const bugsSnapshot = await getDocs(collection(db, "bugs"));
-        const bugs = bugsSnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        })) as any[];
-
-        // Fetch bug hunts (for company lookup on hunt submissions)
-        const huntsSnapshot = await getDocs(collection(db, "bugHunts"));
-        const hunts = huntsSnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        })) as any[];
-
-        const huntCompanyById = new Map<string, string>();
-        hunts.forEach((hunt) => {
-          const company = hunt.company || hunt.companyName || "";
-          huntCompanyById.set(hunt.id, company);
-        });
-
-        // Fetch hunt submissions
-        const huntSubmissionsSnapshot = await getDocs(
-          collection(db, "bugHuntSubmissions"),
-        );
-        const huntSubmissions = huntSubmissionsSnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        })) as any[];
-
-        // Merge all submissions
-        const allSubmissions = [...bugs, ...huntSubmissions];
+        // Fetch submissions via authenticated server endpoint
+        const res = await fetch("/api/bug-submissions", { credentials: "include" });
+        if (!res.ok) {
+          throw new Error("Failed to fetch bug submissions");
+        }
+        const allSubmissions: any[] = await res.json();
 
         // Filter submissions by organization if applicable
         const filteredSubmissions = allSubmissions.filter((submission) => {
           const submissionCompany =
             submission.normalizedCompany ||
             submission.company ||
-            huntCompanyById.get(submission.huntId) ||
             "";
           return matchesOrg(submissionCompany);
         });

@@ -1,73 +1,63 @@
-import { db } from "@/firebaseConfig"
-import { collection, query, where, getDocs, updateDoc, doc } from "firebase/firestore"
+/**
+ * User Gamification Stats Helper (MongoDB Implementation)
+ *
+ * Updates hunter points, submitted bug counters, streaks, and reputation tiers
+ * in the MongoDB user_points_balances collection.
+ */
 
-export async function updateUserBugCount(username: string, increment: number = 1) {
+import { getMongoDatabase } from "@/lib/db/mongodb";
+import { GamificationRepository } from "@/lib/db/repositories/gamification.repo";
+
+// Server-only database execution guard
+if (typeof window !== "undefined") {
+  throw new Error("lib/update-user-stats.ts is a server-only module and cannot be executed in the browser.");
+}
+
+export async function updateUserBugCount(username: string, increment: number = 1): Promise<boolean> {
   try {
-    // Find the user profile by username
-    const q = query(collection(db, "userProfiles"), where("username", "==", username))
-    const snapshot = await getDocs(q)
-    if (snapshot.empty) return false
-    
-    const userDoc = snapshot.docs[0]
-    const currentBugCount = userDoc.data().bugsSubmitted || 0
-    
-    await updateDoc(doc(db, "userProfiles", userDoc.id), {
-      bugsSubmitted: currentBugCount + increment,
-      lastActivity: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    
-    return true
+    const db = await getMongoDatabase();
+    const repo = new GamificationRepository(db);
+
+    const existing = await repo.getPointsBalanceByUsername(username);
+    const userId = existing?.user_id || username;
+
+    await repo.addPoints(userId, 0, {
+      username,
+      bugIncrement: increment,
+      reason: "Bug count incremented",
+    });
+
+    return true;
   } catch (error) {
-    console.error("Error updating bug count:", error)
-    return false
+    console.error("Error updating bug count:", error);
+    return false;
   }
 }
 
-export async function updateUserStats(username: string, points: number, bugIncrement: number = 1, role: "user" | "admin" = "user", companyName?: string) {
+export async function updateUserStats(
+  username: string,
+  points: number,
+  bugIncrement: number = 1,
+  role: "user" | "admin" | "triager" | "company" | "hunter" | string = "user",
+  companyName?: string
+): Promise<boolean> {
   try {
-    console.log(`Updating stats for user: ${username}, points: ${points}, role: ${role}, company: ${companyName}`)
-    
-    // Find the user profile by username
-    const q = query(collection(db, "userProfiles"), where("username", "==", username))
-    const snapshot = await getDocs(q)
-    
-    if (snapshot.empty) {
-      console.error(`No user profile found for username: ${username}`)
-      // Let's create the profile if it doesn't exist
-      const { addDoc } = await import("firebase/firestore")
-      await addDoc(collection(db, "userProfiles"), {
-        username: username,
-        points: points,
-        bugsSubmitted: bugIncrement,
-        role: role,
-        companyName: companyName,
-        createdAt: new Date().toISOString(),
-        lastActivity: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })
-      console.log(`Created new profile for ${username}`)
-      return true
-    }
-    
-    const userDoc = snapshot.docs[0]
-    const currentData = userDoc.data()
-    const currentPoints = currentData.points || 0
-    const currentBugCount = currentData.bugsSubmitted || 0
-    
-    console.log(`Current points: ${currentPoints}, adding: ${points}, new total: ${currentPoints + points}`)
-    
-    await updateDoc(doc(db, "userProfiles", userDoc.id), {
-      points: currentPoints + points,
-      bugsSubmitted: currentBugCount + bugIncrement,
-      lastActivity: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    
-    console.log(`Successfully updated stats for ${username}`)
-    return true
+    const db = await getMongoDatabase();
+    const repo = new GamificationRepository(db);
+
+    // Look up existing balance by username or default to username as string ID
+    const existing = await repo.getPointsBalanceByUsername(username);
+    const userId = existing?.user_id || username;
+
+    await repo.addPoints(userId, points, {
+      username,
+      bugIncrement,
+      reason: `Stats updated (role: ${role}${companyName ? `, company: ${companyName}` : ""})`,
+    });
+
+    return true;
   } catch (error) {
-    console.error("Error updating user stats:", error)
-    return false
+    console.error("Error updating user stats:", error);
+    return false;
   }
 }

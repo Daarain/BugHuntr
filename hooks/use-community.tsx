@@ -1,470 +1,303 @@
-"use client"
+"use client";
 
-import type React from "react"
-
-import { useState, useEffect, createContext, useContext, useMemo } from "react"
-import type { Community, CommunityChannel, CommunityMember, CommunityMessage } from "@/types/community"
-import { db } from "@/firebaseConfig"
-import { useAuth } from "@/components/auth/auth-context"
-import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  increment,
-  limit,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-} from "firebase/firestore"
+import type React from "react";
+import { useState, useEffect, createContext, useContext, useMemo, useCallback } from "react";
+import type { Community, CommunityChannel, CommunityMember, CommunityMessage } from "@/types/community";
+import { useAuth } from "@/components/auth/auth-context";
 
 interface CommunityContextType {
-  communities: Community[]
-  currentCommunity: Community | null
-  communityMembers: CommunityMember[]
-  communityMessages: CommunityMessage[]
-  joinedCommunities: Community[]
-  joinedCommunityIds: string[]
-  isLoading: boolean
+  communities: Community[];
+  currentCommunity: Community | null;
+  communityMembers: CommunityMember[];
+  communityMessages: CommunityMessage[];
+  joinedCommunities: Community[];
+  joinedCommunityIds: string[];
+  isLoading: boolean;
 
   // Actions
-  setCurrentCommunity: (community: Community | null) => void
-  joinCommunity: (communityId: string) => Promise<void>
-  leaveCommunity: (communityId: string) => Promise<void>
-  createCommunity: (communityData: Partial<Community>) => Promise<Community>
+  setCurrentCommunity: (community: Community | null) => void;
+  joinCommunity: (communityId: string) => Promise<void>;
+  leaveCommunity: (communityId: string) => Promise<void>;
+  createCommunity: (communityData: Partial<Community>) => Promise<Community>;
   createChannel: (
     communityId: string,
-    channelData: Pick<CommunityChannel, "name" | "description" | "type" | "isPrivate">,
-  ) => Promise<CommunityChannel>
-  updateCommunity: (communityId: string, updates: Partial<Community>) => Promise<void>
-  sendMessage: (channelId: string, content: string) => Promise<void>
-  getChannelMessages: (channelId: string) => CommunityMessage[]
-  getUserRole: (communityId: string, userId: string) => string | null
-  getCommunityChannels: (communityId: string) => CommunityChannel[]
+    channelData: Pick<CommunityChannel, "name" | "description" | "type" | "isPrivate">
+  ) => Promise<CommunityChannel>;
+  updateCommunity: (communityId: string, updates: Partial<Community>) => Promise<void>;
+  sendMessage: (channelId: string, content: string) => Promise<void>;
+  getChannelMessages: (channelId: string) => CommunityMessage[];
+  getUserRole: (communityId: string, userId: string) => string | null;
+  getCommunityChannels: (communityId: string) => CommunityChannel[];
 }
 
-const CommunityContext = createContext<CommunityContextType | undefined>(undefined)
+const CommunityContext = createContext<CommunityContextType | undefined>(undefined);
 
 export function useCommunity() {
-  const context = useContext(CommunityContext)
+  const context = useContext(CommunityContext);
   if (context === undefined) {
-    throw new Error("useCommunity must be used within a CommunityProvider")
+    throw new Error("useCommunity must be used within a CommunityProvider");
   }
-  return context
+  return context;
 }
 
 export function CommunityProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth()
-  const [communities, setCommunities] = useState<Community[]>([])
-  const [currentCommunity, setCurrentCommunity] = useState<Community | null>(null)
-  const [communityMembers, setCommunityMembers] = useState<CommunityMember[]>([])
-  const [communityMessages, setCommunityMessages] = useState<CommunityMessage[]>([])
-  const [joinedCommunityIds, setJoinedCommunityIds] = useState<string[]>([])
-  const [channelMap, setChannelMap] = useState<Record<string, CommunityChannel[]>>({})
-  const [isLoading, setIsLoading] = useState(true)
+  const { user } = useAuth();
+  const [communities, setCommunities] = useState<Community[]>([]);
+  const [currentCommunity, setCurrentCommunity] = useState<Community | null>(null);
+  const [communityMembers, setCommunityMembers] = useState<CommunityMember[]>([]);
+  const [communityMessages, setCommunityMessages] = useState<CommunityMessage[]>([]);
+  const [joinedCommunityIds, setJoinedCommunityIds] = useState<string[]>([]);
+  const [channelMap, setChannelMap] = useState<Record<string, CommunityChannel[]>>({});
+  const [isLoading, setIsLoading] = useState(true);
 
-  const toIso = (value: any): string => {
-    if (!value) return new Date().toISOString()
-    if (typeof value === "string") return value
-    if (typeof value?.toDate === "function") return value.toDate().toISOString()
-    return new Date(value).toISOString()
-  }
-
-  const mapCommunity = (id: string, data: any, channels: CommunityChannel[]): Community => {
-    const isPrivate =
-      typeof data.isPrivate === "boolean"
-        ? data.isPrivate
-        : data.type === "private"
-    const memberCount = Number(data.memberCount ?? data.membersCount ?? 0)
-
-    return {
-      id,
-      name: data.name ?? "Unnamed Community",
-      description: data.description ?? "",
-      avatar: data.avatar,
-      banner: data.banner,
-      isPrivate,
-      memberCount,
-      createdAt: toIso(data.createdAt),
-      ownerId: data.ownerId ?? "",
-      tags: Array.isArray(data.tags) ? data.tags : [],
-      projects: Array.isArray(data.projects) ? data.projects : [],
-      channels,
-    }
-  }
-
-  const buildDefaultChannels = (createdAt: string): CommunityChannel[] => [
-    {
-      id: "general",
-      name: "general",
-      type: "text",
-      description: "General bug solving discussion",
-      isPrivate: false,
-      memberIds: [],
-      createdAt,
-    },
-    {
-      id: "frontend",
-      name: "frontend",
-      type: "text",
-      description: "Frontend bugs and fixes",
-      isPrivate: false,
-      memberIds: [],
-      createdAt,
-    },
-    {
-      id: "backend",
-      name: "backend",
-      type: "text",
-      description: "Backend debugging and architecture",
-      isPrivate: false,
-      memberIds: [],
-      createdAt,
-    },
-    {
-      id: "security",
-      name: "security",
-      type: "text",
-      description: "Security triage and exploit mitigation",
-      isPrivate: false,
-      memberIds: [],
-      createdAt,
-    },
-  ]
-
-  const ensureDefaultChannels = async (communityId: string) => {
-    const channelsRef = collection(db, "communities", communityId, "channels")
-    const existingChannels = await getDocs(query(channelsRef, limit(1)))
-    if (!existingChannels.empty) return
-
-    const defaults = buildDefaultChannels(new Date().toISOString())
-    for (const channel of defaults) {
-      await setDoc(doc(db, "communities", communityId, "channels", channel.id), {
-        ...channel,
-        createdAt: serverTimestamp(),
-      })
-    }
-
-    await updateDoc(doc(db, "communities", communityId), {
-      channelCount: defaults.length,
-      updatedAt: serverTimestamp(),
-    }).catch(() => null)
-  }
-
-  useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, "communities"), (snapshot) => {
-      setCommunities((prev) => {
-        const next = snapshot.docs.map((communityDoc) => {
-          const fallbackChannels = prev.find((p) => p.id === communityDoc.id)?.channels ?? []
-          const channels = channelMap[communityDoc.id] ?? fallbackChannels
-          return mapCommunity(communityDoc.id, communityDoc.data(), channels)
-        })
-        return next
-      })
-      setIsLoading(false)
-    })
-
-    return () => unsubscribe()
-  }, [channelMap])
-
-  useEffect(() => {
-    if (!user?.id) {
-      setJoinedCommunityIds([])
-      setIsLoading(false)
-      return
-    }
-
-    const membershipQuery = query(collection(db, "community_memberships"), where("userId", "==", user.id))
-    const unsubscribe = onSnapshot(membershipQuery, (snapshot) => {
-      const ids = snapshot.docs.map((membershipDoc) => String(membershipDoc.data().communityId))
-      setJoinedCommunityIds(ids)
-      setIsLoading(false)
-    })
-
-    return () => unsubscribe()
-  }, [user?.id])
-
-  useEffect(() => {
-    if (joinedCommunityIds.length === 0) {
-      setChannelMap({})
-      return
-    }
-
-    const unsubscribers = joinedCommunityIds.map((communityId) =>
-      onSnapshot(collection(db, "communities", communityId, "channels"), (snapshot) => {
-        const channels: CommunityChannel[] = snapshot.docs.map((channelDoc) => {
-          const data = channelDoc.data()
-          return {
-            id: channelDoc.id,
-            name: data.name ?? "general",
-            type: data.type ?? "text",
-            description: data.description,
-            isPrivate: Boolean(data.isPrivate),
-            memberIds: Array.isArray(data.memberIds) ? data.memberIds : [],
-            createdAt: toIso(data.createdAt),
-          }
-        })
-
-        setChannelMap((prev) => ({ ...prev, [communityId]: channels }))
-      }),
-    )
-
-    return () => {
-      unsubscribers.forEach((unsubscribe) => unsubscribe())
-    }
-  }, [joinedCommunityIds.join("|")])
-
-  useEffect(() => {
-    if (joinedCommunityIds.length === 0) return
-
-    Promise.all(joinedCommunityIds.map((communityId) => ensureDefaultChannels(communityId))).catch(() => null)
-  }, [joinedCommunityIds.join("|")])
-
-  useEffect(() => {
-    if (!currentCommunity?.id) {
-      setCommunityMembers([])
-      return
-    }
-
-    const unsubscribe = onSnapshot(collection(db, "communities", currentCommunity.id, "members"), (snapshot) => {
-      const members: CommunityMember[] = snapshot.docs.map((memberDoc) => {
-        const data = memberDoc.data()
-        return {
-          id: memberDoc.id,
-          userId: data.userId ?? memberDoc.id,
-          username: data.username ?? "Anonymous",
-          avatar: data.avatar,
-          role: data.role ?? "member",
-          joinedAt: toIso(data.joinedAt),
-          isOnline: Boolean(data.isOnline),
-          permissions: Array.isArray(data.permissions) ? data.permissions : [],
-          reputation: Number(data.reputation ?? 0),
-          skills: Array.isArray(data.skills) ? data.skills : [],
+  const fetchCommunities = useCallback(async () => {
+    try {
+      const res = await fetch("/api/communities");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.communities)) {
+          setCommunities(data.communities);
         }
-      })
+      }
+    } catch (err) {
+      console.error("Failed to fetch communities:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
-      setCommunityMembers(members)
-    })
+  const fetchJoinedCommunities = useCallback(async () => {
+    if (!user?.id) {
+      setJoinedCommunityIds([]);
+      return;
+    }
 
-    return () => unsubscribe()
-  }, [currentCommunity?.id])
+    try {
+      const res = await fetch("/api/communities?joined=true");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.communities)) {
+          const ids = data.communities.map((c: any) => c.id);
+          setJoinedCommunityIds(ids);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch joined communities:", err);
+    }
+  }, [user?.id]);
+
+  const fetchCommunityDetails = useCallback(async (communityId: string) => {
+    if (!communityId) return;
+
+    try {
+      const res = await fetch(`/api/communities/${communityId}`);
+      if (res.ok) {
+        const data = await res.json();
+        const comm = data?.community;
+        if (comm) {
+          if (Array.isArray(comm.channels)) {
+            setChannelMap((prev) => ({ ...prev, [communityId]: comm.channels }));
+          }
+          if (Array.isArray(comm.members)) {
+            setCommunityMembers(comm.members);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch community details:", err);
+    }
+  }, []);
+
+  const fetchChannelMessages = useCallback(async (communityId: string, channelId: string) => {
+    if (!communityId || !channelId) return;
+
+    try {
+      const res = await fetch(`/api/communities/${communityId}/channels/${channelId}/messages?limit=100`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.messages)) {
+          setCommunityMessages(data.messages);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch channel messages:", err);
+    }
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    fetchCommunities();
+  }, [fetchCommunities]);
+
+  useEffect(() => {
+    fetchJoinedCommunities();
+  }, [fetchJoinedCommunities]);
+
+  // Load details and members when current community changes
+  useEffect(() => {
+    if (currentCommunity?.id) {
+      fetchCommunityDetails(currentCommunity.id);
+    } else {
+      setCommunityMembers([]);
+    }
+  }, [currentCommunity?.id, fetchCommunityDetails]);
+
+  // Polling for updates
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchCommunities();
+      if (user?.id) {
+        fetchJoinedCommunities();
+      }
+      if (currentCommunity?.id) {
+        fetchCommunityDetails(currentCommunity.id);
+      }
+    }, 6000);
+
+    return () => clearInterval(interval);
+  }, [fetchCommunities, fetchJoinedCommunities, fetchCommunityDetails, user?.id, currentCommunity?.id]);
 
   const joinedCommunities = useMemo(
     () => communities.filter((community) => joinedCommunityIds.includes(community.id)),
-    [communities, joinedCommunityIds],
-  )
+    [communities, joinedCommunityIds]
+  );
 
   useEffect(() => {
-    if (currentCommunity && joinedCommunityIds.includes(currentCommunity.id)) return
+    if (currentCommunity && joinedCommunityIds.includes(currentCommunity.id)) return;
     if (joinedCommunities.length > 0) {
-      setCurrentCommunity(joinedCommunities[0])
-      return
+      setCurrentCommunity(joinedCommunities[0]);
+      return;
     }
-    setCurrentCommunity(null)
-  }, [joinedCommunities, joinedCommunityIds.join("|"), currentCommunity?.id])
+    setCurrentCommunity(null);
+  }, [joinedCommunities, joinedCommunityIds, currentCommunity]);
 
   const joinCommunity = async (communityId: string) => {
-    if (!user?.id) return
+    if (!user?.id) return;
 
-    await ensureDefaultChannels(communityId)
+    const res = await fetch(`/api/communities/${communityId}/join`, {
+      method: "POST",
+    });
 
-    const membershipId = `${communityId}_${user.id}`
-    const membershipRef = doc(db, "community_memberships", membershipId)
-    const membershipSnapshot = await getDoc(membershipRef)
-    if (membershipSnapshot.exists()) return
-
-    await setDoc(membershipRef, {
-      communityId,
-      userId: user.id,
-      username: user.username,
-      joinedAt: serverTimestamp(),
-      role: "member",
-    })
-
-    await setDoc(
-      doc(db, "communities", communityId, "members", user.id),
-      {
-        userId: user.id,
-        username: user.username,
-        role: "member",
-        joinedAt: serverTimestamp(),
-        isOnline: true,
-        permissions: ["comment", "create_thread"],
-        reputation: 0,
-        skills: [],
-      },
-      { merge: true },
-    )
-
-    await updateDoc(doc(db, "communities", communityId), {
-      memberCount: increment(1),
-      membersCount: increment(1),
-      updatedAt: serverTimestamp(),
-    }).catch(() => null)
-  }
+    if (res.ok) {
+      setJoinedCommunityIds((prev) => Array.from(new Set([...prev, communityId])));
+      await fetchCommunities();
+      await fetchCommunityDetails(communityId);
+    }
+  };
 
   const leaveCommunity = async (communityId: string) => {
-    if (!user?.id) return
+    if (!user?.id) return;
 
-    const membershipId = `${communityId}_${user.id}`
-    await deleteDoc(doc(db, "community_memberships", membershipId)).catch(() => null)
-    await deleteDoc(doc(db, "communities", communityId, "members", user.id)).catch(() => null)
-    await updateDoc(doc(db, "communities", communityId), {
-      memberCount: increment(-1),
-      membersCount: increment(-1),
-      updatedAt: serverTimestamp(),
-    }).catch(() => null)
+    const res = await fetch(`/api/communities/${communityId}/leave`, {
+      method: "POST",
+    });
 
-    if (currentCommunity?.id === communityId) setCurrentCommunity(null)
-  }
+    if (res.ok) {
+      setJoinedCommunityIds((prev) => prev.filter((id) => id !== communityId));
+      if (currentCommunity?.id === communityId) {
+        setCurrentCommunity(null);
+      }
+      await fetchCommunities();
+    }
+  };
 
   const createCommunity = async (communityData: Partial<Community>): Promise<Community> => {
     if (!user?.id) {
-      throw new Error("You must be logged in to create a community")
+      throw new Error("You must be logged in to create a community");
     }
 
-    const createdAt = new Date().toISOString()
-    const defaultChannels: CommunityChannel[] = buildDefaultChannels(createdAt)
+    const res = await fetch("/api/communities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(communityData),
+    });
 
-    const communityRef = await addDoc(collection(db, "communities"), {
-      name: communityData.name || "New Community",
-      description: communityData.description || "",
-      isPrivate: communityData.isPrivate || false,
-      type: communityData.isPrivate ? "private" : "public",
-      memberCount: 0,
-      membersCount: 0,
-      channelCount: defaultChannels.length,
-      createdAt: serverTimestamp(),
-      ownerId: user.id,
-      tags: communityData.tags || [],
-      projects: [],
-      avatar: communityData.avatar || "",
-      banner: communityData.banner || "",
-    })
-
-    for (const channel of defaultChannels) {
-      await setDoc(doc(db, "communities", communityRef.id, "channels", channel.id), {
-        ...channel,
-        createdAt: serverTimestamp(),
-      })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: "Failed to create community" }));
+      throw new Error(err.error || "Failed to create community");
     }
 
-    await joinCommunity(communityRef.id)
-    await setDoc(
-      doc(db, "community_memberships", `${communityRef.id}_${user.id}`),
-      {
-        communityId: communityRef.id,
-        userId: user.id,
-        username: user.username,
-        joinedAt: serverTimestamp(),
-        role: "owner",
-      },
-      { merge: true },
-    )
+    const data = await res.json();
+    const created: Community = data.community;
 
-    await setDoc(
-      doc(db, "communities", communityRef.id, "members", user.id),
-      {
-        userId: user.id,
-        username: user.username,
-        role: "owner",
-        joinedAt: serverTimestamp(),
-        isOnline: true,
-        permissions: ["manage_community", "manage_channels", "manage_members", "moderate_messages"],
-        reputation: 25,
-        skills: [],
-      },
-      { merge: true },
-    )
+    setJoinedCommunityIds((prev) => Array.from(new Set([...prev, created.id])));
+    await fetchCommunities();
+    setCurrentCommunity(created);
 
-    const newCommunity: Community = {
-      id: communityRef.id,
-      name: communityData.name || "New Community",
-      description: communityData.description || "",
-      isPrivate: communityData.isPrivate || false,
-      memberCount: 1,
-      createdAt,
-      ownerId: user.id,
-      tags: communityData.tags || [],
-      projects: [],
-      channels: defaultChannels,
-    }
-
-    return newCommunity
-  }
+    return created;
+  };
 
   const createChannel = async (
     communityId: string,
-    channelData: Pick<CommunityChannel, "name" | "description" | "type" | "isPrivate">,
+    channelData: Pick<CommunityChannel, "name" | "description" | "type" | "isPrivate">
   ): Promise<CommunityChannel> => {
-    const channelId = channelData.name.toLowerCase().trim().replace(/[^a-z0-9-]/g, "-")
-    const channel: CommunityChannel = {
-      id: channelId,
-      name: channelData.name,
-      description: channelData.description,
-      type: channelData.type,
-      isPrivate: channelData.isPrivate,
-      memberIds: [],
-      createdAt: new Date().toISOString(),
+    const res = await fetch(`/api/communities/${communityId}/channels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(channelData),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: "Failed to create channel" }));
+      throw new Error(err.error || "Failed to create channel");
     }
 
-    await setDoc(doc(db, "communities", communityId, "channels", channel.id), {
-      ...channel,
-      createdAt: serverTimestamp(),
-    })
+    const data = await res.json();
+    const channel: CommunityChannel = data.channel;
 
-    await updateDoc(doc(db, "communities", communityId), {
-      channelCount: increment(1),
-      updatedAt: serverTimestamp(),
-    }).catch(() => null)
+    setChannelMap((prev) => ({
+      ...prev,
+      [communityId]: [...(prev[communityId] || []), channel],
+    }));
 
-    return channel
-  }
+    return channel;
+  };
 
   const updateCommunity = async (communityId: string, updates: Partial<Community>) => {
-    await updateDoc(doc(db, "communities", communityId), {
-      ...updates,
-      updatedAt: serverTimestamp(),
-    })
-  }
+    const res = await fetch(`/api/communities/${communityId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
 
-  const sendMessage = async (channelId: string, content: string) => {
-    if (!user?.id || !currentCommunity?.id || !content.trim()) return
-
-    const newMessage: CommunityMessage = {
-      id: Date.now().toString(),
-      channelId,
-      userId: user.id,
-      username: user.username,
-      content,
-      timestamp: new Date().toISOString(),
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: "Failed to update community" }));
+      throw new Error(err.error || "Failed to update community");
     }
 
-    await addDoc(collection(db, "communities", currentCommunity.id, "channels", channelId, "messages"), {
-      ...newMessage,
-      timestamp: serverTimestamp(),
-    })
+    await fetchCommunities();
+    await fetchCommunityDetails(communityId);
+  };
 
-    setCommunityMessages((prev) => [...prev, newMessage])
-  }
+  const sendMessage = async (channelId: string, content: string) => {
+    if (!user?.id || !currentCommunity?.id || !content.trim()) return;
+
+    const res = await fetch(`/api/communities/${currentCommunity.id}/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.message) {
+        setCommunityMessages((prev) => [...prev, data.message]);
+      }
+    }
+  };
 
   const getChannelMessages = (channelId: string) => {
-    return communityMessages.filter((msg) => msg.channelId === channelId)
-  }
+    return communityMessages.filter((msg) => msg.channelId === channelId);
+  };
 
   const getUserRole = (communityId: string, userId: string) => {
     const member = communityMembers.find(
-      (m) => m.userId === userId && joinedCommunityIds.includes(communityId),
-    )
-    return member?.role || null
-  }
+      (m) => m.userId === userId && joinedCommunityIds.includes(communityId)
+    );
+    return member?.role || null;
+  };
 
-  const getCommunityChannels = (communityId: string) => channelMap[communityId] ?? []
+  const getCommunityChannels = (communityId: string) => channelMap[communityId] ?? [];
 
   const value: CommunityContextType = {
     communities,
@@ -484,7 +317,7 @@ export function CommunityProvider({ children }: { children: React.ReactNode }) {
     getChannelMessages,
     getUserRole,
     getCommunityChannels,
-  }
+  };
 
-  return <CommunityContext.Provider value={value}>{children}</CommunityContext.Provider>
+  return <CommunityContext.Provider value={value}>{children}</CommunityContext.Provider>;
 }
