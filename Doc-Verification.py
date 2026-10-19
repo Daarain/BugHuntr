@@ -20,12 +20,16 @@ CORS(app, origins=["http://localhost:3000"])
 # -------------------------
 # Use environment variable for Firebase credentials path
 cred_path = os.getenv('FIREBASE_CREDENTIALS_PATH', './bughuntr-3f895-firebase-adminsdk-fbsvc-488e0dd16e.json')
-if not os.path.exists(cred_path):
-    raise FileNotFoundError(f"Firebase credentials file not found at: {cred_path}")
-
-cred = credentials.Certificate(cred_path)
-initialize_app(cred)
-db = firestore.client()
+db = None
+if os.path.exists(cred_path):
+    try:
+        cred = credentials.Certificate(cred_path)
+        initialize_app(cred)
+        db = firestore.client()
+    except Exception as e:
+        print(f"Warning: Failed to initialize Firebase: {e}")
+else:
+    print(f"Warning: Firebase credentials file not found at {cred_path}. Firebase persistence disabled.")
 
 # -------------------------
 # OCR Setup
@@ -383,8 +387,11 @@ def signup():
             "verified": True  # Auto-verify since OCR validation passed
         }
         
-        db.collection("users").add(user_data)
-        print(f"User {username} registered successfully")
+        if db is not None:
+            db.collection("users").add(user_data)
+            print(f"User {username} registered successfully")
+        else:
+            print(f"User {username} validated (db client not active)")
 
         return jsonify({
             "success": True, 
