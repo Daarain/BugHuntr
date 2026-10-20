@@ -21,6 +21,8 @@ import urllib.parse
 import socket
 import ipaddress
 from groq import Groq
+import uuid
+from werkzeug.utils import secure_filename
 
 load_dotenv()
 
@@ -827,10 +829,17 @@ def analyze_bug_screenshot():
 			visual_context_path = None
 
 			if screenshot:
-				filename = screenshot.filename or "upload"
-				if not is_allowed_file(filename):
-					return jsonify({"error": f"Unsupported file type: {filename}"}), 400
-				file_path = os.path.join(temp_dir, filename)
+				raw_name = screenshot.filename or "upload"
+				if not is_allowed_file(raw_name):
+					return jsonify({"error": f"Unsupported file type: {raw_name}"}), 400
+				safe_name = secure_filename(os.path.basename(raw_name))
+				if not safe_name or not is_allowed_file(safe_name):
+					ext = raw_name.rsplit('.', 1)[1].lower() if '.' in raw_name else 'png'
+					safe_name = f"upload_{uuid.uuid4().hex[:8]}.{ext}"
+				file_path = os.path.abspath(os.path.join(temp_dir, safe_name))
+				if not file_path.startswith(os.path.abspath(temp_dir) + os.sep):
+					return jsonify({"error": "Path traversal detected in upload filename."}), 400
+				filename = safe_name
 				screenshot.save(file_path)
 				visual_context_path = file_path
 			else:

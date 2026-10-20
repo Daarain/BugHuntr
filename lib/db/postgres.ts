@@ -45,6 +45,25 @@ export function getPostgresUrl(): string {
  * - idleTimeoutMillis: 10000 (10s) to release idle connections promptly in serverless containers.
  * - connectionTimeoutMillis: 5000 (5s) to fail fast on network or pool exhaustion.
  */
+function getPostgresSslConfig(urlStr: string): boolean | { rejectUnauthorized: boolean } | undefined {
+  if (process.env.PGSSLMODE === "disable") {
+    return false;
+  }
+  const isLocal =
+    urlStr.includes("localhost") ||
+    urlStr.includes("127.0.0.1") ||
+    urlStr.includes("@postgres:") ||
+    urlStr.includes("@localhost");
+
+  if (isLocal) {
+    return undefined;
+  }
+
+  return {
+    rejectUnauthorized: process.env.PG_SSL_REJECT_UNAUTHORIZED !== "false",
+  };
+}
+
 export function getPostgresPool(configOverrides?: Partial<PoolConfig>): Pool {
   if (globalThis._pgPool) {
     return globalThis._pgPool;
@@ -54,6 +73,7 @@ export function getPostgresPool(configOverrides?: Partial<PoolConfig>): Pool {
 
   const pool = new Pool({
     connectionString,
+    ssl: configOverrides?.ssl ?? getPostgresSslConfig(connectionString),
     max: 2,
     idleTimeoutMillis: 10000,
     connectionTimeoutMillis: 5000,

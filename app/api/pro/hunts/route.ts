@@ -250,8 +250,31 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden: You do not own this Pro Bug Hunt." }, { status: 403 });
     }
 
-    const { id, _id, createdBy, created_at, companyId, ...updates } = body;
-    await repo.updateHunt(body.id, updates);
+    const allowedUpdateKeys = [
+      "title",
+      "description",
+      "allowedTargetSegments",
+      "ndaTemplateId",
+      "ndaTemplateText",
+      "requireKYC",
+      "requireCerts",
+      "allowBids",
+      "minRank",
+      "minHuntsParticipated",
+      "requiredCertifications",
+      "rewards",
+      "maxHunters",
+      "status",
+      "endsAt",
+      "inviteOnly",
+    ];
+    const safeUpdates: Record<string, any> = {};
+    for (const key of allowedUpdateKeys) {
+      if (body[key] !== undefined) {
+        safeUpdates[key] = body[key];
+      }
+    }
+    await repo.updateHunt(body.id, safeUpdates);
 
     const updated = await repo.getHuntById(body.id);
     return NextResponse.json({ success: true, hunt: updated ? mapDocToProHunt(updated) : null });

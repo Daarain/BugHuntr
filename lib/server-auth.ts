@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { NextRequest, type NextResponse } from "next/server";
+import { authRepository } from "@/lib/db/auth-repository";
 
 export interface SessionUser {
   id: string;
@@ -12,12 +13,35 @@ export interface SessionUser {
   companyName?: string;
 }
 
-export function getServerSession(
+export async function getServerSession(
   request: Request | NextRequest
 ): Promise<{ user: SessionUser } | null> {
   const { authenticated, user } = getSessionFromRequest(request);
-  if (!authenticated || !user) return Promise.resolve(null);
-  return Promise.resolve({ user });
+  if (!authenticated || !user) return null;
+
+  // Authoritative server-side account validation (ban/deactivation/role check)
+  const isPgConfigured = Boolean(
+    (process.env.POSTGRES_URL || process.env.DATABASE_URL)?.trim()
+  );
+
+  if (isPgConfigured && user.id) {
+    try {
+      const activeUser = await authRepository.findUserById(user.id);
+      if (!activeUser || !activeUser.is_active || activeUser.is_banned) {
+        return null;
+      }
+      // Re-sync authoritative roles
+      const roles = activeUser.roles || [];
+      const isActualAdmin = roles.includes("admin");
+      const isTriager = roles.includes("triager");
+      const isCompany = roles.includes("company");
+      user.role = isActualAdmin ? "admin" : (isTriager ? "triager" : (isCompany ? "company" : "user"));
+    } catch {
+      // In offline testing or temporary DB unavailability, allow verified token session
+    }
+  }
+
+  return { user };
 }
 
 interface SessionPayload extends SessionUser {
@@ -43,8 +67,8 @@ const VALID_ROLES = new Set(["user", "admin", "triager", "company", "hunter"]);
 
 export function getSessionSecret(): string {
   const isProduction = process.env.NODE_ENV === "production";
-  const rawSecret = process.env.SESSION_SECRET || process.env.INTERNAL_API_SECRET;
-  const secret = rawSecret ? rawSecret.trim() : "";
+  const rawSecret = process.env.SESSION_SECRET?.trim() || "";
+  const secret = rawSecret;
 
   if (isProduction) {
     if (!secret) {

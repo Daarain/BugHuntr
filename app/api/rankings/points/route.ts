@@ -13,9 +13,10 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const targetUserId = body.userId || user.id;
+    const isStaff = user.role === "admin" || user.role === "triager";
 
-    // Cross-user authorization check
-    if (targetUserId !== user.id && user.role !== "admin" && user.role !== "triager") {
+    // 1. Cross-user authorization check: ordinary users can never award points to others
+    if (targetUserId !== user.id && !isStaff) {
       return NextResponse.json(
         { error: "Forbidden: You are not authorized to award points to other users" },
         { status: 403 }
@@ -26,20 +27,45 @@ export async function POST(request: NextRequest) {
     const bugId = body.bugId ? (typeof body.bugId === "number" ? body.bugId : parseInt(body.bugId, 10)) : undefined;
     const reason = (body.reason || "Points awarded").trim();
 
+    // 2. Prevent arbitrary points inflation:
+    // Non-staff users CANNOT provide arbitrary `body.points`. Points must come strictly from verified severity.
+    if (!isStaff && typeof body.points === "number" && !severity) {
+      return NextResponse.json(
+        { error: "Forbidden: Only administrators and triagers can award manual arbitrary points" },
+        { status: 403 }
+      );
+    }
+
     const db = await getMongoDatabase();
     const repo = new GamificationRepository(db);
+
+    // 3. Idempotency enforcement: prevent duplicate points awards for the same bug ID
+    if (bugId) {
+      const existingTx = await db.collection("points_transactions").findOne({
+        user_id: targetUserId,
+        bug_id: bugId,
+      });
+      if (existingTx) {
+        return NextResponse.json(
+          { error: `Points have already been awarded for bug ID ${bugId}` },
+          { status: 409 }
+        );
+      }
+    }
 
     const currentBalance = await repo.getPointsBalance(targetUserId);
     const streak = currentBalance?.streak || 0;
     const multiplier = getStreakMultiplier(streak);
 
-    let basePoints = typeof body.points === "number" ? body.points : 0;
+    let basePoints = 0;
     if (severity && SEVERITY_POINTS[severity]) {
       basePoints = SEVERITY_POINTS[severity];
+    } else if (isStaff && typeof body.points === "number") {
+      basePoints = body.points;
     }
 
-    if (basePoints <= 0) {
-      return NextResponse.json({ error: "Points must be greater than zero" }, { status: 400 });
+    if (basePoints <= 0 || basePoints > 100000) {
+      return NextResponse.json({ error: "Invalid points amount: must be positive and not exceed 100,000" }, { status: 400 });
     }
 
     const pointsToAward = Math.floor(basePoints * multiplier);

@@ -91,14 +91,13 @@ export async function POST(request: NextRequest) {
     } = body;
 
     const isPlatformAdmin = session.user.role === "admin";
-    const isOrgMember =
-      session.user.role === "company" &&
-      (session.user.organizationId === orgId || session.user.orgId === orgId);
-    const isDemo = orgId === "demo_org_001";
+    const isDemo = orgId === "demo_org_001" && process.env.NODE_ENV !== "production";
 
-    if (!isPlatformAdmin && !isOrgMember && !isDemo) {
+    // Strictly restrict direct wallet balance mutations to platform administrators (or demo org in non-production)
+    // Company users cannot forge unbacked wallet balances.
+    if (!isPlatformAdmin && !isDemo) {
       return NextResponse.json(
-        { error: "Forbidden: Not authorized to modify this organization wallet" },
+        { error: "Forbidden: Only platform administrators can initialize or top up organization balances" },
         { status: 403 }
       );
     }

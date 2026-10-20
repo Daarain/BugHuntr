@@ -22,16 +22,24 @@ CORS(
     methods=["GET", "POST", "OPTIONS"]
 )
 
+ALLOWED_CORS_ORIGINS = {
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://bug-huntr-eight.vercel.app",
+}
+
 @app.before_request
 def handle_options():
-    # Respond to preflight OPTIONS early and with correct headers
+    # Respond to preflight OPTIONS early and with strictly validated origin
     if request.method == "OPTIONS":
         resp = make_response()
         resp.status_code = 204
-        resp.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "https://bug-huntr-eight.vercel.app")
+        origin = request.headers.get("Origin")
+        if origin and origin in ALLOWED_CORS_ORIGINS:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        resp.headers["Access-Control-Allow-Credentials"] = "true"
         return resp
 
 @app.after_request

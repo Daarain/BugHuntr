@@ -14,6 +14,13 @@ import { GamificationRepository } from "@/lib/db/repositories/gamification.repo"
 
 export async function POST(request: NextRequest) {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return NextResponse.json(
+        { error: "Forbidden: Demo earning simulation is strictly disabled in production." },
+        { status: 403 }
+      );
+    }
+
     const session = await getServerSession(request);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

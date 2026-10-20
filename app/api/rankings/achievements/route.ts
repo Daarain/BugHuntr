@@ -74,8 +74,27 @@ export async function POST(request: NextRequest) {
           qualified = balance.reputation_rank === achievement.requirement.value;
           break;
         case "special":
-          if (achievement.requirement.value === "critical_bug" && severity === "critical") {
-            qualified = true;
+          if (achievement.requirement.value === "critical_bug") {
+            // Require verified critical bug outcome in database (points transaction or submission)
+            // rather than trusting unverified client parameter
+            const pointsTxCol = db.collection("points_transactions");
+            const hasCriticalTx = await pointsTxCol.findOne({
+              user_id: user.id,
+              severity: "critical",
+            });
+
+            if (hasCriticalTx) {
+              qualified = true;
+            } else {
+              const submissionsCol = db.collection("submissions");
+              const hasCriticalSub = await submissionsCol.findOne({
+                hunter_id: user.id,
+                severity: "critical",
+              });
+              if (hasCriticalSub) {
+                qualified = true;
+              }
+            }
           }
           break;
       }

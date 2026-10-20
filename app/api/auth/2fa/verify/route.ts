@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyChallengeToken } from "@/lib/auth-2fa";
+import { enforceRateLimit } from "@/lib/security/rate-limiter";
 
 export async function POST(request: NextRequest) {
   try {
+    const rateLimitResponse = await enforceRateLimit(request, {
+      action: "2fa_verify",
+      limit: 15,
+      windowSeconds: 900,
+    });
+    if (rateLimitResponse) return rateLimitResponse;
     const body = await request.json().catch(() => null);
     if (!body) {
       return NextResponse.json({ error: "Request body is required." }, { status: 400 });

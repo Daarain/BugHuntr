@@ -346,19 +346,7 @@ export default function SubmitBugPage() {
         // Update local ranking state
         addPoints(user.id, Date.now(), severity, `Bug report: ${formData.title} (${severity} severity)`)
 
-        // Update points and bug count in gamification database via server API
-        try {
-          await fetch("/api/user/stats", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({ points, bugIncrement: 1 }),
-          })
-        } catch (statsErr) {
-          console.warn("Failed to update stats via server:", statsErr)
-        }
-
-        alert(`Bug submitted successfully! You earned ${points} points. Your submission is now under review.`)
+        alert(`Bug submitted successfully! Your submission is now under review. Points will be awarded upon verification.`)
       } else {
         alert("Bug submitted successfully! Your submission is now under review.")
       }

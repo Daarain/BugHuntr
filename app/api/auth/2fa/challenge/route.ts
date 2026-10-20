@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createChallengeToken, isEmailTransportConfigured } from "@/lib/auth-2fa";
+import { enforceRateLimit } from "@/lib/security/rate-limiter";
+import { authRepository } from "@/lib/db/auth-repository";
 
 export async function POST(request: NextRequest) {
   try {
+    const rateLimitResponse = await enforceRateLimit(request, {
+      action: "2fa_challenge",
+      limit: 5,
+      windowSeconds: 900,
+    });
+    if (rateLimitResponse) return rateLimitResponse;
     const body = await request.json().catch(() => null);
     if (!body || typeof body.email !== "string" || !body.email.includes("@")) {
       return NextResponse.json(
@@ -13,6 +21,16 @@ export async function POST(request: NextRequest) {
     }
 
     const email = body.email.trim().toLowerCase();
+
+    // Verify user exists if PostgreSQL is configured
+    const user = await authRepository.findUserByEmail(email).catch(() => null);
+    if (!user) {
+      // Return 404 with generic security error to prevent unauthorized challenge generation
+      return NextResponse.json(
+        { error: "Account not found or 2FA not enabled." },
+        { status: 404 }
+      );
+    }
 
     // Verify 2FA transport is configured
     if (!isEmailTransportConfigured()) {

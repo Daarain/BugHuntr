@@ -9,7 +9,17 @@ export interface TwoFactorPayload {
   codeHash: string;
 }
 
-const USED_CHALLENGES = new Set<string>();
+const USED_CHALLENGES = new Map<string, number>();
+
+function cleanExpiredChallenges(now: number): void {
+  if (USED_CHALLENGES.size > 1000) {
+    for (const [id, exp] of USED_CHALLENGES.entries()) {
+      if (exp < now) {
+        USED_CHALLENGES.delete(id);
+      }
+    }
+  }
+}
 
 export function isEmailTransportConfigured(): boolean {
   const {
@@ -29,13 +39,32 @@ export function isEmailTransportConfigured(): boolean {
   );
 }
 
+const KNOWN_INSECURE_2FA_SECRETS = new Set([
+  "bughuntr_2fa_default_secure_secret_fallback_2026",
+  "secret",
+  "changeme",
+  "password",
+  "12345678",
+]);
+
 function get2FASecret(): string {
-  const secret = process.env.AUTH_2FA_SECRET || process.env.INTERNAL_API_SECRET;
-  if (!secret || secret.trim().length === 0) {
-    // Fallback secret for development if neither is configured
-    return "bughuntr_2fa_default_secure_secret_fallback_2026";
+  const isProduction = process.env.NODE_ENV === "production";
+  const rawSecret = process.env.AUTH_2FA_SECRET?.trim() || "";
+
+  if (isProduction) {
+    if (!rawSecret) {
+      throw new Error("AUTH_2FA_SECRET must be configured in production.");
+    }
+    if (rawSecret.length < 32 || KNOWN_INSECURE_2FA_SECRETS.has(rawSecret)) {
+      throw new Error("AUTH_2FA_SECRET is insecure; must be at least 32 characters in production.");
+    }
+    return rawSecret;
   }
-  return secret.trim();
+
+  // Development and test fallback
+  if (rawSecret) return rawSecret;
+  const devFallback = process.env.INTERNAL_API_SECRET?.trim();
+  return devFallback || "bughuntr_2fa_default_secure_secret_fallback_2026";
 }
 
 function signPayload(payloadStr: string): string {
@@ -105,6 +134,9 @@ export function verifyChallengeToken(
     return { valid: false, error: "Challenge token signature validation failed." };
   }
 
+  // Prune expired tokens periodically
+  cleanExpiredChallenges(Date.now());
+
   // Check replay
   if (USED_CHALLENGES.has(payload.challengeId)) {
     return { valid: false, error: "Challenge token has already been used." };
@@ -146,7 +178,7 @@ export function verifyChallengeToken(
   if (!isMatch) {
     const attemptsRemaining = payload.attemptsLeft - 1;
     if (attemptsRemaining <= 0) {
-      USED_CHALLENGES.add(payload.challengeId);
+      USED_CHALLENGES.set(payload.challengeId, payload.expiresAt);
       return {
         valid: false,
         error: "Invalid 2FA code. Maximum attempts exceeded. Please request a new code.",
@@ -173,7 +205,7 @@ export function verifyChallengeToken(
   }
 
   // Mark challenge as used to prevent replay
-  USED_CHALLENGES.add(payload.challengeId);
+  USED_CHALLENGES.set(payload.challengeId, payload.expiresAt);
 
   // Generate verified ticket
   const ticketPayload = JSON.stringify({

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { setSessionCookie, type SessionUser } from "@/lib/server-auth";
 import { authRepository, DuplicateAccountError } from "@/lib/db/auth-repository";
+import { enforceRateLimit } from "@/lib/security/rate-limiter";
 
 function isPostgresConfigured(): boolean {
   const url = process.env.POSTGRES_URL || process.env.DATABASE_URL;
@@ -10,6 +11,12 @@ function isPostgresConfigured(): boolean {
 
 export async function POST(request: NextRequest) {
   try {
+    const rateLimitResponse = await enforceRateLimit(request, {
+      action: "signup",
+      limit: 10,
+      windowSeconds: 900,
+    });
+    if (rateLimitResponse) return rateLimitResponse;
     const body = await request.json().catch(() => null);
     if (!body) {
       return NextResponse.json({ error: "Request body is required." }, { status: 400 });

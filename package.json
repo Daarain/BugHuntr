@@ -5,9 +5,9 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "lint": "tsc --noEmit",
+    "lint": "npx eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/test_migration_schema_and_rls.mjs tests/test_migration_synthetic_integrity.mjs tests/test_mongo_migration_synthetic.mjs tests/test_staging_diagnostic_guards.mjs tests/test_firebase_replacement.mjs tests/test_server_auth_and_2fa.mjs tests/test_postgres_auth_repository.mjs tests/test_mongo_repositories.mjs tests/test_wallets_and_payouts.mjs tests/test_bug_hunts_and_submissions.mjs tests/test_user_profiles_and_settings.mjs tests/test_rankings_and_gamification.mjs tests/test_community_and_collaboration.mjs tests/test_pro_hunts_and_invitations.mjs tests/test_vulnerabilities_and_cve.mjs tests/test_api_containment.mjs tests/test_upload_validation.mjs tests/test_server_client_boundaries.mjs tests/test_access_control_and_privacy.mjs tests/test_auth_security_remediation.mjs tests/test_navbar_notification_polling.mjs tests/test_transfer_reward_mongo.mjs",
+    "test": "tsx --test tests/test_migration_schema_and_rls.mjs tests/test_migration_synthetic_integrity.mjs tests/test_mongo_migration_synthetic.mjs tests/test_staging_diagnostic_guards.mjs tests/test_firebase_replacement.mjs tests/test_server_auth_and_2fa.mjs tests/test_postgres_auth_repository.mjs tests/test_mongo_repositories.mjs tests/test_wallets_and_payouts.mjs tests/test_bug_hunts_and_submissions.mjs tests/test_user_profiles_and_settings.mjs tests/test_rankings_and_gamification.mjs tests/test_community_and_collaboration.mjs tests/test_pro_hunts_and_invitations.mjs tests/test_vulnerabilities_and_cve.mjs tests/test_api_containment.mjs tests/test_upload_validation.mjs tests/test_server_client_boundaries.mjs tests/test_access_control_and_privacy.mjs tests/test_auth_security_remediation.mjs tests/test_navbar_notification_polling.mjs tests/test_transfer_reward_mongo.mjs tests/test_audit_security_remediation_suite.mjs",
     "start": "next start"
   },
   "dependencies": {

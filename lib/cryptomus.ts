@@ -62,7 +62,7 @@ export function verifyCryptomusWebhookSignature(
   receivedSignature: string,
   apiKey: string
 ): boolean {
-  if (!receivedSignature || !apiKey || !payload) {
+  if (!receivedSignature || typeof receivedSignature !== "string" || !apiKey || !payload) {
     return false;
   }
 
@@ -71,7 +71,14 @@ export function verifyCryptomusWebhookSignature(
 
   try {
     const expected = signCryptomusPayload(payloadCopy, apiKey);
-    return expected.toLowerCase() === receivedSignature.toLowerCase();
+    const expectedBuffer = Buffer.from(expected.toLowerCase(), "utf8");
+    const receivedBuffer = Buffer.from(receivedSignature.toLowerCase(), "utf8");
+
+    if (expectedBuffer.length !== receivedBuffer.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
   } catch {
     return false;
   }

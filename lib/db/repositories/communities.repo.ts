@@ -39,6 +39,10 @@ export interface CommunityMemberDetailDoc {
   updated_at?: Date;
 }
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\export class CommunitiesRepository {");
+}
+
 export class CommunitiesRepository {
   private commCol: Collection<CommunityDoc>;
   private membershipsCol: Collection<CommunityMembershipDoc>;
@@ -128,11 +132,15 @@ export class CommunitiesRepository {
   async listCommunities(options?: { search?: string; limit?: number }): Promise<CommunityDoc[]> {
     const filter: any = {};
     if (options?.search) {
-      filter.$or = [
-        { name: { $regex: options.search, $options: "i" } },
-        { description: { $regex: options.search, $options: "i" } },
-        { tags: { $in: [options.search] } },
-      ];
+      const rawSearch = options.search.trim().slice(0, 100);
+      const safeSearch = escapeRegex(rawSearch);
+      if (safeSearch) {
+        filter.$or = [
+          { name: { $regex: safeSearch, $options: "i" } },
+          { description: { $regex: safeSearch, $options: "i" } },
+          { tags: { $in: [rawSearch] } },
+        ];
+      }
     }
 
     return this.commCol
@@ -581,12 +589,15 @@ export class CommunitiesRepository {
       query.tags = { $all: filters.tags };
     }
     if (filters?.search) {
-      const s = filters.search.trim();
-      query.$or = [
-        { title: { $regex: s, $options: "i" } },
-        { description: { $regex: s, $options: "i" } },
-        { tags: { $in: [s] } },
-      ];
+      const rawSearch = filters.search.trim().slice(0, 100);
+      const safeSearch = escapeRegex(rawSearch);
+      if (safeSearch) {
+        query.$or = [
+          { title: { $regex: safeSearch, $options: "i" } },
+          { description: { $regex: safeSearch, $options: "i" } },
+          { tags: { $in: [rawSearch] } },
+        ];
+      }
     }
 
     return this.threadsCol

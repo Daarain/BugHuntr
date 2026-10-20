@@ -8,6 +8,7 @@ import {
   isEmailTransportConfigured,
 } from "@/lib/auth-2fa";
 import { authRepository } from "@/lib/db/auth-repository";
+import { enforceRateLimit } from "@/lib/security/rate-limiter";
 
 function isPostgresConfigured(): boolean {
   const url = process.env.POSTGRES_URL || process.env.DATABASE_URL;
@@ -16,6 +17,12 @@ function isPostgresConfigured(): boolean {
 
 export async function POST(request: NextRequest) {
   try {
+    const rateLimitResponse = await enforceRateLimit(request, {
+      action: "login",
+      limit: 15,
+      windowSeconds: 900,
+    });
+    if (rateLimitResponse) return rateLimitResponse;
     const body = await request.json().catch(() => null);
     if (!body || typeof body.email !== "string" || typeof body.password !== "string") {
       return NextResponse.json(
@@ -103,8 +110,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. Enforce 2FA for all administrative accounts
-    if (isActualAdmin) {
+    // 3. Enforce 2FA for all accounts that have it enabled or are admins
+    const userCredentials = await authRepository.getUserCredentials(userId).catch(() => []);
+    const hasEnabled2FA = userCredentials.some(
+      (c) => c.is_enabled && (c.credential_type === "totp" || c.credential_type === "email_otp")
+    );
+    const requires2FA = isActualAdmin || hasEnabled2FA;
+
+    if (requires2FA) {
       if (!twoFactorCode || !challengeToken) {
         if (!isEmailTransportConfigured()) {
           return NextResponse.json(
@@ -123,7 +136,9 @@ export async function POST(request: NextRequest) {
           {
             requires2FA: true,
             challengeToken: newChallengeToken,
-            message: "Two-factor authentication required for administrator accounts.",
+            message: isActualAdmin
+              ? "Two-factor authentication required for administrator accounts."
+              : "Two-factor authentication is required for this account.",
           },
           { status: 200 }
         );

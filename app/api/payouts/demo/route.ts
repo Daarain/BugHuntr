@@ -13,6 +13,13 @@ import { WalletsRepository } from "@/lib/db/repositories/wallets.repo";
 
 export async function POST(request: NextRequest) {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return NextResponse.json(
+        { error: "Forbidden: Demo payout simulation endpoint is strictly disabled in production." },
+        { status: 403 }
+      );
+    }
+
     const session = await getServerSession(request);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -26,9 +33,26 @@ export async function POST(request: NextRequest) {
       orgId = "demo_org_001",
     } = body;
 
+    // Strict security guard: Cannot target or debit non-demo organizations
+    const DEMO_ORG_ID = "demo_org_001";
+    if (orgId !== DEMO_ORG_ID) {
+      return NextResponse.json(
+        { error: "Forbidden: Demo payout simulator can only execute against demo_org_001" },
+        { status: 403 }
+      );
+    }
+
     const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      return NextResponse.json({ error: "Invalid payout amount" }, { status: 400 });
+    if (isNaN(parsedAmount) || parsedAmount <= 0 || parsedAmount > 100000) {
+      return NextResponse.json({ error: "Invalid payout amount: must be between 1 and 100,000" }, { status: 400 });
+    }
+
+    const evmPattern = /^0x[a-fA-F0-9]{40}$/;
+    if (!evmPattern.test(hunterWallet)) {
+      return NextResponse.json(
+        { error: "Invalid wallet address format: must be valid 0x EVM address" },
+        { status: 400 }
+      );
     }
 
     const amountMicroUnits = Math.floor(parsedAmount * 1000000);

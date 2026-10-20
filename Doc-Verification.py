@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+import uuid
+from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 load_dotenv()
 from paddleocr import PaddleOCR
@@ -278,12 +280,22 @@ def signup():
         supporting_doc = request.files.get("supportingDoc")
         
         if supporting_doc and supporting_doc.filename:
-            filename = supporting_doc.filename
-            if not is_allowed_file(filename):
-                return jsonify({"error": f"Unsupported file type: {filename}"}), 400
+            raw_filename = supporting_doc.filename
+            if not is_allowed_file(raw_filename):
+                return jsonify({"error": f"Unsupported file type: {raw_filename}"}), 400
+
+            safe_name = secure_filename(os.path.basename(raw_filename))
+            if not safe_name or not is_allowed_file(safe_name):
+                ext = raw_filename.rsplit('.', 1)[1].lower() if '.' in raw_filename else 'bin'
+                safe_name = f"upload_{uuid.uuid4().hex[:8]}.{ext}"
 
             with tempfile.TemporaryDirectory() as temp_dir:
-                file_path = os.path.join(temp_dir, filename)
+                temp_dir_abs = os.path.abspath(temp_dir)
+                file_path = os.path.abspath(os.path.join(temp_dir, safe_name))
+                if not file_path.startswith(temp_dir_abs + os.sep):
+                    return jsonify({"error": "Path traversal detected in upload filename."}), 400
+
+                filename = safe_name
                 supporting_doc.save(file_path)
                 
                 try:

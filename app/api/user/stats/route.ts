@@ -112,14 +112,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Role check: Only administrators or triagers may manually modify user stats.
+    // Ordinary users cannot modify their own or other users' authoritative points or bug counters.
+    const isStaff = session.user.role === "admin" || session.user.role === "triager";
+    if (!isStaff) {
+      return NextResponse.json(
+        { error: "Forbidden: User statistics and points are authoritative and can only be updated by administrators and triagers." },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
-    const { points, bugIncrement } = body;
+    const { points, bugIncrement, username: targetUsername } = body;
 
     const safePoints = typeof points === "number" && points > 0 ? points : 0;
     const safeBugIncrement = typeof bugIncrement === "number" ? bugIncrement : 1;
+    const effectiveUsername = (targetUsername && typeof targetUsername === "string") ? targetUsername.trim() : session.user.username;
 
     const success = await updateUserStats(
-      session.user.username,
+      effectiveUsername,
       safePoints,
       safeBugIncrement,
       session.user.role
