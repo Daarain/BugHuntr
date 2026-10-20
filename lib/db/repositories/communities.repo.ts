@@ -39,8 +39,8 @@ export interface CommunityMemberDetailDoc {
   updated_at?: Date;
 }
 
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\export class CommunitiesRepository {");
+export function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export class CommunitiesRepository {

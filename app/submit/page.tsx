@@ -4,6 +4,7 @@ import type React from "react"
 import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -130,7 +131,7 @@ export default function SubmitBugPage() {
   // Call backend for severity detection
   const detectSeverity = async () => {
     if (!formData.title || !formData.description) {
-      alert("Please fill in Title and Technical Description before detecting severity.")
+      toast.error("Please fill in Title and Technical Description before detecting severity.")
       return
     }
     try {
@@ -158,7 +159,7 @@ export default function SubmitBugPage() {
           setFakeReport(data.fake_report as FakeReportResult)
         }
       } else {
-        alert("Failed to detect severity. Please try again.")
+        toast.error("Failed to detect severity. Please try again.")
       }
 
       if (formData.pocFile || uploadedUrl) {
@@ -166,7 +167,7 @@ export default function SubmitBugPage() {
       }
     } catch (err) {
       console.error("Error detecting severity:", err)
-      alert("Error connecting to severity detection service.")
+      toast.error("Error connecting to severity detection service.")
     } finally {
       setDetectingSeverity(false)
     }
@@ -175,7 +176,7 @@ export default function SubmitBugPage() {
   // ☁ Upload Proof of Concept to Cloudinary (with base64 fallback)
   const handleFileUpload = async () => {
     if (!formData.pocFile) {
-      alert("Please select an image or video first!")
+      toast.error("Please select an image or video first!")
       return
     }
 
@@ -204,7 +205,7 @@ export default function SubmitBugPage() {
       
       if (response.ok && data?.url) {
         setUploadedUrl(data.url)
-        alert("✅ Proof uploaded successfully!")
+        toast.success("Proof uploaded successfully!")
       } else {
         throw new Error(data?.error || "Cloudinary upload failed")
       }
@@ -216,10 +217,10 @@ export default function SubmitBugPage() {
         const base64 = await convertToBase64(formData.pocFile)
         setUploadedUrl(base64)
         console.log("Base64 upload successful!")
-        alert("✅ Proof uploaded successfully! (Using base64 fallback)")
+        toast.success("Proof uploaded successfully! (Using base64 fallback)")
       } catch (base64Error) {
         console.error("Base64 conversion failed:", base64Error)
-        alert("❌ Upload failed. Please try again.")
+        toast.error("Upload failed. Please try again.")
       }
     } finally {
       setUploadingProof(false)
@@ -228,7 +229,7 @@ export default function SubmitBugPage() {
 
   const analyzeProof = async (proofUrl?: string) => {
     if (!formData.description) {
-      alert("Please add a Technical Description before analyzing the proof.")
+      toast.error("Please add a Technical Description before analyzing the proof.")
       return false
     }
 
@@ -240,7 +241,7 @@ export default function SubmitBugPage() {
     const isImage = Boolean(formData.pocFile?.type.startsWith("image/"))
     const isPdf = formData.pocFile?.type === "application/pdf"
     if (!isImage && !isPdf) {
-      alert("Proof analysis currently supports images or PDF screenshots only.")
+      toast.error("Proof analysis currently supports images or PDF screenshots only.")
       return
     }
 
@@ -270,7 +271,7 @@ export default function SubmitBugPage() {
           }),
         })
       } else {
-        alert("Please upload a proof file first.")
+        toast.error("Please upload a proof file first.")
         return
       }
 
@@ -285,7 +286,7 @@ export default function SubmitBugPage() {
       return true
     } catch (err) {
       console.error("Error analyzing proof:", err)
-      alert("Error connecting to proof analysis service.")
+      toast.error("Error connecting to proof analysis service.")
       return false
     } finally {
       setAnalyzingProof(false)
@@ -300,7 +301,7 @@ export default function SubmitBugPage() {
     try {
       const duplicateFound = await isDuplicateApprovedBug()
       if (duplicateFound) {
-        alert("This bug appears to already be reported and approved. Please submit a different issue.")
+        toast.error("This bug appears to already be reported and approved. Please submit a different issue.")
         return
       }
 
@@ -327,7 +328,7 @@ export default function SubmitBugPage() {
       if (!response.ok) {
         const errorData = await response.json().catch(() => null)
         if (response.status === 409) {
-          alert(errorData?.error || "This bug appears to already be reported and is pending or approved.")
+          toast.error(errorData?.error || "This bug appears to already be reported and is pending or approved.")
           return
         }
         throw new Error(errorData?.error || "Failed to submit bug report")
@@ -346,15 +347,15 @@ export default function SubmitBugPage() {
         // Update local ranking state
         addPoints(user.id, Date.now(), severity, `Bug report: ${formData.title} (${severity} severity)`)
 
-        alert(`Bug submitted successfully! Your submission is now under review. Points will be awarded upon verification.`)
+        toast.success("Bug submitted successfully! Your submission is now under review. Points will be awarded upon verification.")
       } else {
-        alert("Bug submitted successfully! Your submission is now under review.")
+        toast.success("Bug submitted successfully! Your submission is now under review.")
       }
 
       router.push("/my-submissions")
     } catch (error) {
       console.error("Error submitting bug:", error)
-      alert("Error submitting bug report. Please try again.")
+      toast.error("Error submitting bug report. Please try again.")
     } finally {
       setIsSubmitting(false)
     }

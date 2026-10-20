@@ -31,6 +31,7 @@ import { createSessionToken } from "../lib/server-auth";
 import { createChallengeToken, verifyChallengeToken } from "../lib/auth-2fa";
 import { verifyCryptomusWebhookSignature, signCryptomusPayload } from "../lib/cryptomus";
 import { enforceRateLimit, clearMemoryRateLimitStore } from "../lib/security/rate-limiter";
+import { escapeRegex } from "../lib/db/repositories/communities.repo";
 
 const TEST_SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 process.env.SESSION_SECRET = TEST_SECRET;
@@ -244,16 +245,56 @@ test("SEC-07: Distributed Rate Limiter - Enforces sliding window limits and retu
   assert.ok(rateLimitedRes.headers.get("Retry-After"));
 });
 
-test("SEC-08: Communities Search - Escapes regex characters to prevent ReDoS", async () => {
-  function escapeRegex(str) {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+test("SEC-08: Communities Search - Escapes regex characters to prevent ReDoS across all character classes", async () => {
+  // 1. Quantifiers and wildcards: ., *, +, ?
+  const quantifiers = "vulnerability.*critical+high?";
+  const escQuant = escapeRegex(quantifiers);
+  assert.equal(escQuant, "vulnerability\\.\\*critical\\+high\\?");
+  assert.doesNotThrow(() => new RegExp(escQuant, "i"));
+
+  // 2. Groups, brackets and braces: (), [], {}
+  const groups = "CVE-(2026)-[TEST]-{101}";
+  const escGroups = escapeRegex(groups);
+  assert.equal(escGroups, "CVE-\\(2026\\)-\\[TEST\\]-\\{101\\}");
+  assert.doesNotThrow(() => new RegExp(escGroups, "i"));
+
+  // 3. Anchors and alternates: ^, $, |
+  const anchors = "^admin$|triager";
+  const escAnchors = escapeRegex(anchors);
+  assert.equal(escAnchors, "\\^admin\\$\\|triager");
+  assert.doesNotThrow(() => new RegExp(escAnchors, "i"));
+
+  // 4. Backslashes
+  const backslashes = "path\\to\\dir";
+  const escBackslashes = escapeRegex(backslashes);
+  assert.equal(escBackslashes, "path\\\\to\\\\dir");
+  assert.doesNotThrow(() => new RegExp(escBackslashes, "i"));
+
+  // 5. Catastrophic ReDoS payloads must be safely treated as literal characters without exponential backtracking
+  const redosPayloads = [
+    "((((((a+)+)+)+)+)+)+$",
+    "(a+)+$",
+    "a*a*a*a*a*a*a*b",
+    "([a-zA-Z]+)*$",
+  ];
+
+  for (const payload of redosPayloads) {
+    const escaped = escapeRegex(payload);
+    assert.doesNotThrow(() => new RegExp(escaped, "i"));
+    const regex = new RegExp(escaped, "i");
+    const start = Date.now();
+    // Non-matching input that would cause catastrophic backtracking if unescaped
+    assert.equal(regex.test("aaaaaaaaaaaaaaaaaaaaaaaaaaaa"), false);
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 50, `Regex execution took ${elapsed}ms, expected < 50ms`);
   }
 
-  const redosPayload = "((((((a+)+)+)+)+)+)+$";
-  const escaped = escapeRegex(redosPayload);
-  assert.doesNotThrow(() => new RegExp(escaped, "i"));
-  assert.equal(escaped.includes("\\("), true);
-  assert.equal(escaped.includes("\\+"), true);
+  // 6. Literal exact match verification: brackets do not act as character sets
+  const bracketQuery = "[CRITICAL]";
+  const escBracket = escapeRegex(bracketQuery);
+  const literalRegex = new RegExp(escBracket, "i");
+  assert.equal(literalRegex.test("R"), false); // If unescaped, [CRITICAL] would match 'R'
+  assert.equal(literalRegex.test("[CRITICAL] Bug in parser"), true);
 });
 
 test("SEC-12 & SEC-20: 2FA Token - Replay prevention & secure hashing", async () => {

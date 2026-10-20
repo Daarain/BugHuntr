@@ -28,6 +28,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/components/auth/auth-context";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { toast } from "sonner";
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
@@ -160,7 +161,7 @@ export default function LoginPage() {
           data.user
         );
 
-        alert("Login successful! Welcome back.");
+        toast.success("Login successful! Welcome back.");
         setTimeout(() => {
           router.push("/feed");
         }, 500);
