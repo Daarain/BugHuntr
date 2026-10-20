@@ -25,15 +25,12 @@ import {
   Star,
 } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-context"
-import { db } from "@/firebaseConfig"
-import { collection, query, where, getDocs, updateDoc, doc } from "firebase/firestore"
 import { useRouter } from "next/navigation"
 
 export default function SettingsPage() {
   const { user, isAuthenticated } = useAuth()
   const router = useRouter()
   const [loading, setLoading] = useState(true)
-  const [userDocId, setUserDocId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
 
   const [profile, setProfile] = useState({
@@ -67,34 +64,36 @@ export default function SettingsPage() {
       }
 
       try {
-        // Fetch user from Firestore
-        const q = query(collection(db, "users"), where("email", "==", user.email))
-        const querySnapshot = await getDocs(q)
-
-        if (!querySnapshot.empty) {
-          const userDoc = querySnapshot.docs[0]
-          setUserDocId(userDoc.id)
-          const userData = userDoc.data()
-
-          // Set profile data
+        // 1. Fetch user profile
+        const profileRes = await fetch("/api/user/profile", { credentials: "include" })
+        if (profileRes.ok) {
+          const profileData = await profileRes.json()
           setProfile({
-            username: userData.username || "",
-            email: userData.email || "",
-            fullName: userData.name || "",
-            bio: userData.bio || "",
+            username: profileData.username || user.username || "",
+            email: user.email || "",
+            fullName: profileData.displayName || profileData.name || "",
+            bio: profileData.bio || "",
           })
+        }
 
-          // Set points data
+        // 2. Fetch user points & stats
+        const statsRes = await fetch("/api/user/stats", { credentials: "include" })
+        if (statsRes.ok) {
+          const statsData = await statsRes.json()
           setPoints({
-            total: userData.points || 0,
-            thisMonth: userData.thisMonthPoints || 0,
-            rank: userData.rank || "Beginner",
-            nextMilestone: userData.nextMilestone || 5000,
+            total: statsData.points || 0,
+            thisMonth: statsData.monthlyPoints || 0,
+            rank: statsData.rank || "Beginner",
+            nextMilestone: (statsData.points || 0) + (statsData.nextRankPoints || 500),
           })
+        }
 
-          // Set notifications
-          if (userData.notifications) {
-            setNotifications(userData.notifications)
+        // 3. Fetch notification preferences
+        const settingsRes = await fetch("/api/user/settings", { credentials: "include" })
+        if (settingsRes.ok) {
+          const settingsData = await settingsRes.json()
+          if (settingsData.notifications) {
+            setNotifications(settingsData.notifications)
           }
         }
       } catch (error) {
@@ -109,16 +108,24 @@ export default function SettingsPage() {
 
   // Save profile changes
   const handleSaveProfile = async () => {
-    if (!userDocId) return
-
     setIsSaving(true)
     try {
-      await updateDoc(doc(db, "users", userDocId), {
-        name: profile.fullName,
-        username: profile.username,
-        bio: profile.bio,
+      const res = await fetch("/api/user/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          displayName: profile.fullName,
+          bio: profile.bio,
+        }),
       })
-      alert("Profile updated successfully!")
+
+      if (res.ok) {
+        alert("Profile updated successfully!")
+      } else {
+        const data = await res.json().catch(() => ({}))
+        alert(data.error || "Failed to update profile.")
+      }
     } catch (error) {
       console.error("Error saving profile:", error)
       alert("Error saving profile. Please try again.")
@@ -129,14 +136,23 @@ export default function SettingsPage() {
 
   // Save notification preferences
   const handleSaveNotifications = async () => {
-    if (!userDocId) return
-
     setIsSaving(true)
     try {
-      await updateDoc(doc(db, "users", userDocId), {
-        notifications: notifications,
+      const res = await fetch("/api/user/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          notifications: notifications,
+        }),
       })
-      alert("Notification preferences updated!")
+
+      if (res.ok) {
+        alert("Notification preferences updated!")
+      } else {
+        const data = await res.json().catch(() => ({}))
+        alert(data.error || "Failed to update notification preferences.")
+      }
     } catch (error) {
       console.error("Error saving notifications:", error)
       alert("Error saving preferences. Please try again.")

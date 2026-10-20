@@ -20,9 +20,7 @@ import { useBugHunt } from "@/hooks/use-bug-hunt";
 import { useBugSubmission } from "@/hooks/use-bug-submission";
 import { useUserHunts } from "@/hooks/use-user-hunts";
 import { useEffect, useState, useCallback } from "react";
-import { getUserProfileByUsername } from "@/lib/get-user-profile";
-import { collection, getDocs, query, where } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+
 
 const getSeverityColor = (severity: string) => {
   switch (severity.toLowerCase()) {
@@ -86,8 +84,15 @@ export default function DashboardPage() {
     setPointsError(null);
     try {
       if (user?.username) {
-        const profile = await getUserProfileByUsername(user.username);
-        setProfilePoints((profile as any)?.points ?? 0);
+        const res = await fetch(`/api/user/profile?username=${encodeURIComponent(user.username)}`, {
+          credentials: "include",
+        });
+        if (res.ok) {
+          const profile = await res.json();
+          setProfilePoints((profile as any)?.points ?? 0);
+        } else {
+          setProfilePoints(null);
+        }
       } else {
         setProfilePoints(null);
       }
@@ -117,16 +122,13 @@ export default function DashboardPage() {
         return;
       }
       try {
-        const submissionsQuery = query(
-          collection(db, "bugSubmissions"),
-          where("userId", "==", user.id),
-        );
-        const snapshot = await getDocs(submissionsQuery);
-        const submissions = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setDirectSubmissions(submissions);
+        const res = await fetch("/api/bug-submissions", { credentials: "include" });
+        if (res.ok) {
+          const submissions = await res.json();
+          setDirectSubmissions(submissions);
+        } else {
+          setDirectSubmissions([]);
+        }
       } catch (error) {
         console.error("Failed to load bug submissions:", error);
         setDirectSubmissions([]);

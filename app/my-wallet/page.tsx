@@ -26,25 +26,12 @@ import {
   Copy,
   ExternalLink,
   DollarSign,
-  ArrowUpRight,
-  Download,
   Eye,
   EyeOff,
   Coins,
 } from "lucide-react";
 import { toast } from "sonner";
-import { db } from "@/firebaseConfig";
 import { formatCurrency } from "@/lib/pro-utils";
-import {
-  doc,
-  setDoc,
-  getDoc,
-  collection,
-  query,
-  where,
-  getDocs,
-  serverTimestamp,
-} from "firebase/firestore";
 
 export default function MyWalletPage() {
   const { user, isAuthenticated } = useAuth();
@@ -76,51 +63,33 @@ export default function MyWalletPage() {
     try {
       setLoading(true);
 
-      // Load saved wallet address
-      const userWalletDoc = await getDoc(doc(db, "user_wallets", user.id));
-      if (userWalletDoc.exists()) {
-        const address = userWalletDoc.data().walletAddress;
-        setSavedWalletAddress(address);
-        setWalletAddress(address);
+      // 1. Fetch wallet profile & summary stats from /api/wallet
+      const walletRes = await fetch("/api/wallet");
+      if (walletRes.ok) {
+        const walletData = await walletRes.json();
+        setSavedWalletAddress(walletData.savedWalletAddress || "");
+        setWalletAddress(walletData.walletAddress || "");
+        setWalletBalance(walletData.walletBalance || 0);
       }
 
-      // Load all payouts for this user
-      const payoutsQuery = query(
-        collection(db, "payouts"),
-        where("hunterUid", "==", user.id)
-      );
+      // 2. Fetch user's payouts from /api/payouts
+      const payoutsRes = await fetch("/api/payouts");
+      if (payoutsRes.ok) {
+        const payoutsData = await payoutsRes.json();
+        const allPayouts: any[] = payoutsData.payouts || [];
 
-      const payoutsSnapshot = await getDocs(payoutsQuery);
-      const allPayouts: any[] = payoutsSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
+        const completed = allPayouts.filter((p) => p.status === "completed");
+        const pending = allPayouts.filter(
+          (p) => p.status === "pending_created" || p.status === "processing"
+        );
+        const failed = allPayouts.filter((p) => p.status === "failed");
 
-      // Categorize payouts
-      const completed = allPayouts.filter((p) => p.status === "completed");
-      const pending = allPayouts.filter(
-        (p) => p.status === "pending_created" || p.status === "processing"
-      );
-      const failed = allPayouts.filter((p) => p.status === "failed");
+        setCompletedPayouts(completed);
+        setPendingPayouts(pending);
+        setFailedPayouts(failed);
 
-      setCompletedPayouts(completed);
-      setPendingPayouts(pending);
-      setFailedPayouts(failed);
-
-      // Calculate total earnings
-      const total = completed.reduce((sum, p) => sum + (p.amount || 0), 0);
-      setTotalEarnings(total);
-
-      const profileQuery = query(
-        collection(db, "userProfiles"),
-        where("username", "==", user.id)
-      );
-      const profileSnapshot = await getDocs(profileQuery);
-      if (!profileSnapshot.empty) {
-        const profile = profileSnapshot.docs[0].data();
-        setWalletBalance(profile.walletBalance || 0);
-      } else {
-        setWalletBalance(0);
+        const total = completed.reduce((sum, p) => sum + (p.amount || 0), 0);
+        setTotalEarnings(total);
       }
     } catch (error) {
       console.error("Error loading wallet data:", error);
@@ -145,18 +114,19 @@ export default function MyWalletPage() {
     try {
       setLoading(true);
 
-      await setDoc(
-        doc(db, "user_wallets", user.id),
-        {
-          userId: user.id,
-          username: user.username,
-          walletAddress: walletAddress,
+      const res = await fetch("/api/wallet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletAddress,
           network: "POLYGON",
-          updatedAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save wallet address");
+      }
 
       setSavedWalletAddress(walletAddress);
       toast.success("Wallet address saved successfully!");
@@ -176,37 +146,17 @@ export default function MyWalletPage() {
     try {
       setLoading(true);
 
-      // Create a demo completed payout
-      const demoAmount = Math.floor(Math.random() * 500) + 50; // ₹50-₹550
-      const amountMicroUnits = demoAmount * 1000000;
-      const orderId = `BH-PAYOUT-DEMO-${user.id}-${Date.now()}`;
-
-      await setDoc(doc(db, "payouts", orderId), {
-        order_id: orderId,
-        orgId: "demo_org_001",
-        huntId: `demo_hunt_${Date.now()}`,
-        submissionId: `demo_sub_${Date.now()}`,
-        hunterUid: user.id,
-        hunterWallet: savedWalletAddress,
-        amount: amountMicroUnits,
-        currency: "USDC",
-        network: "POLYGON",
-        status: "completed",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        createdBy: "demo_admin",
-        tx_hash:
-          "0xdemo" +
-          Math.random().toString(36).substring(7) +
-          Math.random().toString(36).substring(7),
-        cryptomus_payout_id: "demo_" + Math.random().toString(36).substring(7),
-        cryptomus_response: {
-          demo: true,
-          scenario: "hunter_demo",
-        },
+      const res = await fetch("/api/wallet/demo-earning", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
       });
 
-      toast.success(`🎉 Demo earning added: ₹${demoAmount} INR!`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to create demo earning");
+      }
+
+      toast.success(`🎉 Demo earning added: ₹${data.amount} INR!`);
 
       // Reload data
       setTimeout(() => loadWalletData(), 500);
@@ -222,13 +172,6 @@ export default function MyWalletPage() {
       minimumFractionDigits: 2,
       maximumFractionDigits: 6,
     });
-  };
-
-  const formatShortAddress = (address: string) => {
-    if (!address) return "";
-    return `${address.substring(0, 6)}...${address.substring(
-      address.length - 4
-    )}`;
   };
 
   const copyToClipboard = (text: string) => {
@@ -454,14 +397,14 @@ export default function MyWalletPage() {
             )}
 
             {savedWalletAddress && (
-                <Button
-                  onClick={createDemoEarning}
-                  disabled={loading}
-                  className="w-full bg-gradient-to-r from-[var(--accent-primary)] to-[var(--accent-hover)] text-black"
-                >
-                  <DollarSign className="h-4 w-4 mr-2" />
-                  Add Demo Earning (Test)
-                </Button>
+              <Button
+                onClick={createDemoEarning}
+                disabled={loading}
+                className="w-full bg-gradient-to-r from-[var(--accent-primary)] to-[var(--accent-hover)] text-black"
+              >
+                <DollarSign className="h-4 w-4 mr-2" />
+                Add Demo Earning (Test)
+              </Button>
             )}
           </CardContent>
         </Card>
@@ -500,7 +443,7 @@ export default function MyWalletPage() {
                 ) : (
                   completedPayouts.map((payout) => (
                     <div
-                      key={payout.id}
+                      key={payout.order_id || payout.id}
                       className="p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
                     >
                       <div className="flex items-center justify-between mb-2">
@@ -551,7 +494,7 @@ export default function MyWalletPage() {
                 ) : (
                   pendingPayouts.map((payout) => (
                     <div
-                      key={payout.id}
+                      key={payout.order_id || payout.id}
                       className="p-4 rounded-lg border bg-card"
                     >
                       <div className="flex items-center justify-between">
@@ -582,7 +525,7 @@ export default function MyWalletPage() {
                 ) : (
                   failedPayouts.map((payout) => (
                     <div
-                      key={payout.id}
+                      key={payout.order_id || payout.id}
                       className="p-4 rounded-lg border border-[color:color-mix(in_srgb,var(--critical)_25%,transparent)] bg-card"
                     >
                       <div className="flex items-center justify-between">

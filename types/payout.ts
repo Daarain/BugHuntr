@@ -125,6 +125,10 @@ export interface Payout {
   /** User who initiated the payout */
   createdBy: string;
 
+  /** Optional payout method and destination (for UI backward-compatibility) */
+  method?: string;
+  destination?: any;
+
   /** Creation timestamp */
   createdAt: Date;
 

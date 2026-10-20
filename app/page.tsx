@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   Shield,
@@ -181,15 +182,48 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <footer className="relative z-10 py-10 border-t border-border/80 px-4">
-        <div className="mx-auto max-w-7xl flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-primary" />
-            <span>© 2025 BugHuntr. All rights reserved.</span>
+      <footer className="relative z-10 py-12 border-t border-border/80 px-4 bg-card/30">
+        <div className="mx-auto max-w-7xl">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6 pb-8 border-b border-border/60">
+            <div className="flex flex-col items-center md:items-start gap-2">
+              <div className="flex items-center gap-2 text-lg font-bold">
+                <Terminal className="h-5 w-5 text-primary" />
+                <span className="text-foreground">Bug<span className="text-[var(--accent-primary)]">Huntr</span></span>
+              </div>
+              <p className="text-xs text-muted-foreground text-center md:text-left">
+                Next-generation crowdsourced vulnerability discovery & bounty coordination platform.
+              </p>
+            </div>
+            <nav className="flex flex-wrap justify-center gap-6 text-sm">
+              <Link href="/feed" className="text-muted-foreground hover:text-foreground transition-colors">
+                Bug Feed
+              </Link>
+              <Link href="/bug-hunt" className="text-muted-foreground hover:text-foreground transition-colors">
+                Bug Hunts
+              </Link>
+              <Link href="/communities" className="text-muted-foreground hover:text-foreground transition-colors">
+                Communities
+              </Link>
+              <Link href="/leaderboard" className="text-muted-foreground hover:text-foreground transition-colors">
+                Leaderboard
+              </Link>
+              <Link href="/docs" className="text-muted-foreground hover:text-foreground transition-colors">
+                Documentation
+              </Link>
+              <a href="mailto:support@bughuntr.io" className="text-muted-foreground hover:text-foreground transition-colors">
+                Support
+              </a>
+            </nav>
           </div>
-          <div className="flex items-center gap-2 text-primary">
-            <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-            <span className="font-semibold">SYSTEM STATUS: OPERATIONAL</span>
+
+          <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-muted-foreground">
+            <div>
+              © {new Date().getFullYear()} BugHuntr. All rights reserved.
+            </div>
+            <div className="flex items-center gap-2 text-primary font-mono text-xs">
+              <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="font-semibold">SYSTEM STATUS: OPERATIONAL</span>
+            </div>
           </div>
         </div>
       </footer>

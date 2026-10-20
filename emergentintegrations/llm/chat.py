@@ -1,4 +1,5 @@
 import asyncio
+import os
 import google.generativeai as genai
 from typing import Optional
 
@@ -16,7 +17,12 @@ class LlmChat:
     """
 
     def __init__(self, api_key: Optional[str] = None, session_id: str = "default", system_message: str = ""):
-        self.api_key = api_key or "AIzaSyD1nV89rTRqS0tXDXimKP2Gj5IdjaC3jG0"
+        resolved_key = (api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+        if not resolved_key:
+            raise ValueError(
+                "Gemini AI configuration error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable is required."
+            )
+        self.api_key = resolved_key
         self.session_id = session_id
         self.system_message = system_message or """You are BugHuntr Assistant, a helpful AI assistant for the BugHuntr platform. 
         You help users navigate the app, understand cybersecurity concepts, provide coding assistance, and answer questions about bug bounty hunting.

@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
-import { addDoc, collection, doc, onSnapshot, orderBy, query, serverTimestamp, limit } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
 import { useAuth } from "@/components/auth/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,66 +17,60 @@ export default function CommunityChatPage() {
   const [isLoading, setIsLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    console.log(params?.id);
-  }, [params?.id]);
-
-  useEffect(() => {
+  const fetchCommunityData = useCallback(async () => {
     if (!id) {
       setIsLoading(false);
       return;
     }
 
-    const communityRef = doc(db, "communities", id);
-    const unsubscribe = onSnapshot(communityRef, (snapshot) => {
-      if (!snapshot.exists()) {
-        setCommunityName(id);
-        setIsLoading(false);
-        return;
+    try {
+      const res = await fetch(`/api/communities/${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.community?.name) {
+          setCommunityName(data.community.name);
+        }
+        setIsMember(Boolean(data?.community?.isMember));
       }
-
-      const data = snapshot.data() as { name?: string };
-      setCommunityName(data.name ?? id);
+    } catch (err) {
+      console.error("Failed to fetch community:", err);
+    } finally {
       setIsLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [id]);
-
-  useEffect(() => {
-    if (!id || !user?.id) {
-      setIsMember(false);
-      return;
     }
+  }, [id]);
 
-    const memberRef = doc(db, "communities", id, "members", user.id);
-    const unsubscribe = onSnapshot(memberRef, (snapshot) => {
-      setIsMember(snapshot.exists());
-    });
-
-    return () => unsubscribe();
-  }, [id, user?.id]);
+  const fetchMessages = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/communities/${id}/messages?limit=50`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.messages)) {
+          setMessages(
+            data.messages.map((m: any) => ({
+              id: m.id,
+              text: m.text || m.content || "",
+              senderId: m.senderId || m.userId || "",
+            }))
+          );
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch messages:", err);
+    }
+  }, [id]);
 
   useEffect(() => {
-    if (!id) return;
+    fetchCommunityData();
+    fetchMessages();
 
-    const messagesQuery = query(
-      collection(db, "communities", id, "messages"),
-      orderBy("createdAt", "asc"),
-      limit(50),
-    );
+    // Polling interval for live chat updates
+    const interval = setInterval(() => {
+      fetchMessages();
+    }, 3000);
 
-    const unsubscribe = onSnapshot(messagesQuery, (snapshot) => {
-      setMessages(
-        snapshot.docs.map((messageDoc) => ({
-          id: messageDoc.id,
-          ...(messageDoc.data() as { text: string; senderId: string }),
-        })),
-      );
-    });
-
-    return () => unsubscribe();
-  }, [id]);
+    return () => clearInterval(interval);
+  }, [fetchCommunityData, fetchMessages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -88,13 +80,20 @@ export default function CommunityChatPage() {
     const text = messageText.trim();
     if (!text || !id || !user?.id || !isMember) return;
 
-    await addDoc(collection(db, "communities", id, "messages"), {
-      text,
-      senderId: user.id,
-      createdAt: serverTimestamp(),
-    });
+    try {
+      const res = await fetch(`/api/communities/${id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
 
-    setMessageText("");
+      if (res.ok) {
+        setMessageText("");
+        await fetchMessages();
+      }
+    } catch (err) {
+      console.error("Failed to send message:", err);
+    }
   };
 
   const isDisabled = authLoading || isLoading || !isMember || !messageText.trim();
@@ -114,9 +113,19 @@ export default function CommunityChatPage() {
 
             return (
               <div key={message.id} className={`flex ${isOwnMessage ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-lg border px-3 py-2 text-sm md:text-base ${isOwnMessage ? "bg-primary text-primary-foreground border-primary" : "bg-card text-foreground border-border"}`}>
+                <div
+                  className={`max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-lg border px-3 py-2 text-sm md:text-base ${
+                    isOwnMessage
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card text-foreground border-border"
+                  }`}
+                >
                   <p className="break-words whitespace-pre-wrap">{message.text}</p>
-                  <p className={`mt-1 text-xs ${isOwnMessage ? "text-primary-foreground/80" : "text-muted-foreground"}`}>
+                  <p
+                    className={`mt-1 text-xs ${
+                      isOwnMessage ? "text-primary-foreground/80" : "text-muted-foreground"
+                    }`}
+                  >
                     {isOwnMessage ? "You" : message.senderId}
                   </p>
                 </div>

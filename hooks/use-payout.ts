@@ -1,25 +1,14 @@
 /**
  * Custom Hook for Payout Operations
  *
- * Provides client-side functions to interact with Cloud Functions
+ * Provides client-side functions to interact with authenticated Next.js API routes
  * for payout creation, status tracking, and management.
+ * Fully migrated to PostgreSQL (Auth) + MongoDB (Business Data).
  */
 
 "use client";
 
 import { useState, useCallback } from "react";
-import { getFunctions, httpsCallable } from "firebase/functions";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  where,
-  onSnapshot,
-  Timestamp,
-} from "firebase/firestore";
-import { db } from "@/firebaseConfig"; // Adjust import path as needed
 import type {
   Payout,
   OrgWallet,
@@ -27,8 +16,6 @@ import type {
   CreatePayoutResponse,
   BatchPayoutResponse,
 } from "@/types/payout";
-
-const functions = getFunctions();
 
 export function usePayouts() {
   const [loading, setLoading] = useState(false);
@@ -43,14 +30,18 @@ export function usePayouts() {
       setError(null);
 
       try {
-        const createPayoutFn = httpsCallable<
-          CreatePayoutRequest,
-          CreatePayoutResponse
-        >(functions, "createPayout");
+        const res = await fetch("/api/payouts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
 
-        const result = await createPayoutFn(request);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to create payout");
+        }
 
-        return result.data;
+        return data;
       } catch (err: any) {
         const errorMessage = err.message || "Failed to create payout";
         setError(errorMessage);
@@ -68,17 +59,22 @@ export function usePayouts() {
   const getPayout = useCallback(
     async (order_id: string): Promise<Payout | null> => {
       try {
-        const payoutDoc = await getDoc(doc(db, "payouts", order_id));
+        const res = await fetch(`/api/payouts/${encodeURIComponent(order_id)}`);
+        if (res.status === 404) return null;
 
-        if (!payoutDoc.exists()) {
-          return null;
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to fetch payout");
         }
 
+        const p = data.payout;
+        if (!p) return null;
+
         return {
-          ...payoutDoc.data(),
-          order_id: payoutDoc.id,
-          createdAt: payoutDoc.data().createdAt?.toDate(),
-          updatedAt: payoutDoc.data().updatedAt?.toDate(),
+          ...p,
+          order_id: p.order_id || p._id,
+          createdAt: p.createdAt ? new Date(p.createdAt) : undefined,
+          updatedAt: p.updatedAt ? new Date(p.updatedAt) : undefined,
         } as Payout;
       } catch (err: any) {
         setError(err.message);
@@ -94,15 +90,18 @@ export function usePayouts() {
   const getOrgPayouts = useCallback(
     async (orgId: string): Promise<Payout[]> => {
       try {
-        const q = query(collection(db, "payouts"), where("orgId", "==", orgId));
+        const res = await fetch(`/api/payouts?orgId=${encodeURIComponent(orgId)}`);
+        const data = await res.json();
 
-        const snapshot = await getDocs(q);
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to fetch organization payouts");
+        }
 
-        return snapshot.docs.map((doc) => ({
-          ...doc.data(),
-          order_id: doc.id,
-          createdAt: doc.data().createdAt?.toDate(),
-          updatedAt: doc.data().updatedAt?.toDate(),
+        return (data.payouts || []).map((p: any) => ({
+          ...p,
+          order_id: p.order_id || p._id,
+          createdAt: p.createdAt ? new Date(p.createdAt) : undefined,
+          updatedAt: p.updatedAt ? new Date(p.updatedAt) : undefined,
         })) as Payout[];
       } catch (err: any) {
         setError(err.message);
@@ -118,18 +117,18 @@ export function usePayouts() {
   const getHunterPayouts = useCallback(
     async (hunterUid: string): Promise<Payout[]> => {
       try {
-        const q = query(
-          collection(db, "payouts"),
-          where("hunterUid", "==", hunterUid)
-        );
+        const res = await fetch(`/api/payouts?hunterUid=${encodeURIComponent(hunterUid)}`);
+        const data = await res.json();
 
-        const snapshot = await getDocs(q);
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to fetch hunter payouts");
+        }
 
-        return snapshot.docs.map((doc) => ({
-          ...doc.data(),
-          order_id: doc.id,
-          createdAt: doc.data().createdAt?.toDate(),
-          updatedAt: doc.data().updatedAt?.toDate(),
+        return (data.payouts || []).map((p: any) => ({
+          ...p,
+          order_id: p.order_id || p._id,
+          createdAt: p.createdAt ? new Date(p.createdAt) : undefined,
+          updatedAt: p.updatedAt ? new Date(p.updatedAt) : undefined,
         })) as Payout[];
       } catch (err: any) {
         setError(err.message);
@@ -140,28 +139,37 @@ export function usePayouts() {
   );
 
   /**
-   * Subscribe to payout status updates
+   * Subscribe to payout status updates via safe interval polling
    */
   const subscribeToPayout = useCallback(
     (order_id: string, onUpdate: (payout: Payout) => void) => {
-      const unsubscribe = onSnapshot(
-        doc(db, "payouts", order_id),
-        (doc) => {
-          if (doc.exists()) {
+      let isMounted = true;
+
+      const fetchStatus = async () => {
+        try {
+          const res = await fetch(`/api/payouts/${encodeURIComponent(order_id)}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.payout && isMounted) {
             onUpdate({
-              ...doc.data(),
-              order_id: doc.id,
-              createdAt: doc.data().createdAt?.toDate(),
-              updatedAt: doc.data().updatedAt?.toDate(),
+              ...data.payout,
+              order_id: data.payout.order_id || data.payout._id,
+              createdAt: data.payout.createdAt ? new Date(data.payout.createdAt) : undefined,
+              updatedAt: data.payout.updatedAt ? new Date(data.payout.updatedAt) : undefined,
             } as Payout);
           }
-        },
-        (err) => {
-          setError(err.message);
+        } catch (err: any) {
+          if (isMounted) setError(err.message);
         }
-      );
+      };
 
-      return unsubscribe;
+      fetchStatus();
+      const interval = setInterval(fetchStatus, 3000);
+
+      return () => {
+        isMounted = false;
+        clearInterval(interval);
+      };
     },
     []
   );
@@ -172,16 +180,21 @@ export function usePayouts() {
   const getOrgWallet = useCallback(
     async (orgId: string): Promise<OrgWallet | null> => {
       try {
-        const walletDoc = await getDoc(doc(db, "org_wallets", orgId));
+        const res = await fetch(`/api/wallet/org?orgId=${encodeURIComponent(orgId)}`);
+        if (res.status === 404) return null;
 
-        if (!walletDoc.exists()) {
-          return null;
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to fetch organization wallet");
         }
 
+        const w = data.wallet;
+        if (!w) return null;
+
         return {
-          ...walletDoc.data(),
-          orgId: walletDoc.id,
-          updatedAt: walletDoc.data().updatedAt?.toDate(),
+          ...w,
+          orgId: w.orgId || orgId,
+          updatedAt: w.updatedAt ? new Date(w.updatedAt) : new Date(),
         } as OrgWallet;
       } catch (err: any) {
         setError(err.message);
@@ -192,27 +205,36 @@ export function usePayouts() {
   );
 
   /**
-   * Subscribe to wallet balance updates
+   * Subscribe to wallet balance updates via interval polling
    */
   const subscribeToWallet = useCallback(
     (orgId: string, onUpdate: (wallet: OrgWallet) => void) => {
-      const unsubscribe = onSnapshot(
-        doc(db, "org_wallets", orgId),
-        (doc) => {
-          if (doc.exists()) {
+      let isMounted = true;
+
+      const fetchWallet = async () => {
+        try {
+          const res = await fetch(`/api/wallet/org?orgId=${encodeURIComponent(orgId)}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.wallet && isMounted) {
             onUpdate({
-              ...doc.data(),
-              orgId: doc.id,
-              updatedAt: doc.data().updatedAt?.toDate(),
+              ...data.wallet,
+              orgId: data.wallet.orgId || orgId,
+              updatedAt: data.wallet.updatedAt ? new Date(data.wallet.updatedAt) : new Date(),
             } as OrgWallet);
           }
-        },
-        (err) => {
-          setError(err.message);
+        } catch (err: any) {
+          if (isMounted) setError(err.message);
         }
-      );
+      };
 
-      return unsubscribe;
+      fetchWallet();
+      const interval = setInterval(fetchWallet, 3000);
+
+      return () => {
+        isMounted = false;
+        clearInterval(interval);
+      };
     },
     []
   );
@@ -235,14 +257,18 @@ export function usePayouts() {
       setError(null);
 
       try {
-        const createBatchFn = httpsCallable<any, BatchPayoutResponse>(
-          functions,
-          "createBatchPayouts"
-        );
+        const res = await fetch("/api/payouts/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orgId, payouts }),
+        });
 
-        const result = await createBatchFn({ orgId, payouts });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to create batch payouts");
+        }
 
-        return result.data;
+        return data;
       } catch (err: any) {
         const errorMessage = err.message || "Failed to create batch payouts";
         setError(errorMessage);

@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { doc, getDoc } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Eye, Calendar, Shield } from "lucide-react";
@@ -41,66 +40,18 @@ export default function BugDetailsPage() {
 
     const fetchBug = async () => {
       try {
-        const docRef = doc(db, "bugs", bugId);
-        const docSnap = await getDoc(docRef);
+        const res = await fetch(`/api/bug-submissions/${bugId}`, {
+          credentials: "include",
+        });
 
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          const bugData = {
-            id: docSnap.id,
-            title: data.title || "Untitled",
-            severity: data.severity || "unknown",
-            category: data.category || "General",
-            company: data.company || data.huntTitle || "Unknown",
-            summary: data.summary || data.description || "No summary provided.",
-            description: data.description || "",
-            status: data.status || "pending",
-            submittedAt: data.submittedAt || "",
-            submittedBy: data.submittedBy || "anonymous",
-            bounty: data.bounty || 0,
-            views: data.views || 0,
-            proofOfConceptUrl: data.proofOfConceptUrl || "",
-          };
+        if (res.status === 403) {
+          setAccessDenied(true);
+          return;
+        }
 
-          console.log("=== BUG DETAILS ACCESS CHECK ===");
-          console.log("Bug severity:", bugData.severity);
-          console.log("Bug company:", bugData.company);
-          console.log("User:", user);
-          console.log("User role:", user?.role);
-          console.log("User company:", user?.companyName);
-
-          const normalizeCompany = (value?: string | null) =>
-            value?.trim().toLowerCase() || "";
-
-          const bugCompanyNormalized =
-            normalizeCompany(data.normalizedCompany) ||
-            normalizeCompany(bugData.company);
-          const userCompanyNormalized = normalizeCompany(user?.companyName);
-
-          // Check access permissions based on user role and company
-          if (user?.role === "admin" && user?.companyName) {
-            console.log("User is admin with company");
-            // Company admins can only access bugs from their own company (all severities)
-            if (bugCompanyNormalized && userCompanyNormalized && bugCompanyNormalized === userCompanyNormalized) {
-              console.log("Company match - access granted");
-              setBug(bugData);
-            } else {
-              console.log("Company mismatch - access denied");
-              // Admin from different company cannot access any bugs
-              setAccessDenied(true);
-            }
-          } else {
-            // For non-admin users, apply severity-based filtering
-            if (bugData.severity === "critical" || bugData.severity === "high") {
-              console.log("Non-admin user accessing critical/high severity - access denied");
-              // Regular users cannot access critical/high severity bugs
-              setAccessDenied(true);
-            } else {
-              console.log("Non-admin user accessing low/medium severity - access granted");
-              // Low and medium severity bugs are accessible to everyone
-              setBug(bugData);
-            }
-          }
+        if (res.ok) {
+          const bugData = await res.json();
+          setBug(bugData);
         } else {
           setBug(null);
         }

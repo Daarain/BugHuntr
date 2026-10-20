@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { db } from "@/firebaseConfig"
-import { collection, query, where, getDocs, onSnapshot } from "firebase/firestore"
 import { Trophy, Bug, Target, Star } from "lucide-react"
 
 interface UserStatsProps {
@@ -42,35 +40,16 @@ export function UserStatsCards({ username }: UserStatsProps) {
 
     const fetchStats = async () => {
       try {
-        // Get user profile data
-        const userQuery = query(collection(db, "userProfiles"), where("username", "==", username))
-        const userSnapshot = await getDocs(userQuery)
-        
-        if (!userSnapshot.empty) {
-          const userData = userSnapshot.docs[0].data()
-          
-          // Get accepted bugs count
-          const bugsQuery = query(
-            collection(db, "bugs"), 
-            where("submittedBy", "==", username),
-            where("status", "==", "accepted")
-          )
-          const acceptedBugsSnapshot = await getDocs(bugsQuery)
-
-          // Calculate rank based on points
-          const points = userData.points || 0
-          let rank = "E"
-          if (points >= 15000) rank = "S"
-          else if (points >= 8000) rank = "A"
-          else if (points >= 4000) rank = "B"
-          else if (points >= 1500) rank = "C"
-          else if (points >= 500) rank = "D"
-
+        const res = await fetch(`/api/user/stats?username=${encodeURIComponent(username)}`, {
+          credentials: "include",
+        })
+        if (res.ok) {
+          const data = await res.json()
           setStats({
-            points: points,
-            bugsSubmitted: userData.bugsSubmitted || 0,
-            acceptedBugs: acceptedBugsSnapshot.size,
-            rank: rank
+            points: data.points ?? 0,
+            bugsSubmitted: data.bugsSubmitted ?? 0,
+            acceptedBugs: data.acceptedBugs ?? 0,
+            rank: data.rank || "E",
           })
         }
       } catch (error) {
@@ -82,29 +61,9 @@ export function UserStatsCards({ username }: UserStatsProps) {
 
     fetchStats()
 
-    // Set up real-time listener for user profile updates
-    const userQuery = query(collection(db, "userProfiles"), where("username", "==", username))
-    const unsubscribe = onSnapshot(userQuery, (snapshot) => {
-      if (!snapshot.empty) {
-        const userData = snapshot.docs[0].data()
-        const points = userData.points || 0
-        let rank = "E"
-        if (points >= 15000) rank = "S"
-        else if (points >= 8000) rank = "A"
-        else if (points >= 4000) rank = "B"
-        else if (points >= 1500) rank = "C"
-        else if (points >= 500) rank = "D"
-
-        setStats(prev => ({
-          ...prev,
-          points: points,
-          bugsSubmitted: userData.bugsSubmitted || 0,
-          rank: rank
-        }))
-      }
-    })
-
-    return () => unsubscribe()
+    // Safe periodic polling instead of client-side Firestore listeners
+    const interval = setInterval(fetchStats, 30000)
+    return () => clearInterval(interval)
   }, [username])
 
   const getRankColor = (rank: string) => {

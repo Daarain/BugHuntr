@@ -34,8 +34,10 @@ import {
  * TODO: Set up emulator in test environment
  * TODO: Implement with @firebase/testing library
  */
+const runIntegrationTests = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
+const describeIntegration = runIntegrationTests ? describe : describe.skip;
 
-describe("CVSS & CVE Workflow Integration Tests", () => {
+describeIntegration("CVSS & CVE Workflow Integration Tests", () => {
   let db: Firestore;
   let auth: Auth;
 

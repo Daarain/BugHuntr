@@ -10,8 +10,6 @@ import { RankBadge } from "@/components/ranking/rank-badge"
 import { Trophy, Search, Filter, TrendingUp, Calendar, Award } from "lucide-react"
 import { FadeIn } from "@/components/animations/fade-in"
 import { motion } from "framer-motion"
-import { db } from "@/firebaseConfig"
-import { collection, getDocs, query, orderBy } from "firebase/firestore"
 import { VerificationBadge } from "@/components/ui/verification-badge"
 
 import { RankTier } from "@/types/ranking"
@@ -34,40 +32,32 @@ export default function LeaderboardPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [filterRank, setFilterRank] = useState<string>("all")
   const [timeframe, setTimeframe] = useState<"all" | "monthly" | "weekly">("all")
-  const [firestoreUsers, setFirestoreUsers] = useState<LeaderboardUser[]>([])
+  const [leaderboardUsers, setLeaderboardUsers] = useState<LeaderboardUser[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Fetch users from Firestore
+  // Fetch users from API
   useEffect(() => {
     const fetchLeaderboard = async () => {
       try {
-        const usersQuery = query(
-          collection(db, "userProfiles"),
-          orderBy("points", "desc")
-        )
-        const snapshot = await getDocs(usersQuery)
-        const users = snapshot.docs.map(doc => {
-          const data = doc.data()
-          const allTimePoints = data.points || 0
-          // Calculate weekly points (assume 5% of all-time points for demo)
-          const weeklyPoints = Math.floor(allTimePoints * 0.05)
-          // Calculate monthly points (assume 20% of all-time points for demo)
-          const monthlyPoints = Math.floor(allTimePoints * 0.20)
-          
-          return {
-            id: doc.id,
-            username: data.username || "Unknown",
-            points: allTimePoints,
-            weeklyPoints: weeklyPoints,
-            monthlyPoints: monthlyPoints,
-            bugsSubmitted: data.bugsSubmitted || 0,
-            joinedAt: data.createdAt || new Date().toISOString(),
-            rank: calculateRank(allTimePoints),
-            role: data.role || "user",
-            companyName: data.companyName
+        const res = await fetch("/api/rankings/leaderboard?limit=100")
+        if (res.ok) {
+          const data = await res.json()
+          if (Array.isArray(data?.leaderboard)) {
+            const users = data.leaderboard.map((item: any) => ({
+              id: item.id || item.userId,
+              username: item.username || "Unknown",
+              points: item.totalPoints || item.points || 0,
+              weeklyPoints: item.weeklyPoints || 0,
+              monthlyPoints: item.monthlyPoints || 0,
+              bugsSubmitted: item.bugsSubmitted || item.bugsFound || 0,
+              joinedAt: item.joinedAt || item.joinDate || new Date().toISOString(),
+              rank: item.rank || calculateRank(item.totalPoints || item.points || 0),
+              role: item.role || "user",
+              companyName: item.companyName,
+            }))
+            setLeaderboardUsers(users)
           }
-        })
-        setFirestoreUsers(users)
+        }
       } catch (error) {
         console.error("Error fetching leaderboard:", error)
       } finally {
@@ -102,7 +92,7 @@ export default function LeaderboardPage() {
   }
 
   // 🔎 Search + Filter - use Firestore data if available, fallback to mock data
-  const usersToFilter = firestoreUsers.length > 0 ? firestoreUsers : userRankings.map(user => ({
+  const usersToFilter = leaderboardUsers.length > 0 ? leaderboardUsers : userRankings.map(user => ({
     id: user.userId,
     username: user.username,
     points: user.totalPoints || 0,

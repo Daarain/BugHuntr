@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+import uuid
+from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 load_dotenv()
 from paddleocr import PaddleOCR
@@ -20,12 +22,16 @@ CORS(app, origins=["http://localhost:3000"])
 # -------------------------
 # Use environment variable for Firebase credentials path
 cred_path = os.getenv('FIREBASE_CREDENTIALS_PATH', './bughuntr-3f895-firebase-adminsdk-fbsvc-488e0dd16e.json')
-if not os.path.exists(cred_path):
-    raise FileNotFoundError(f"Firebase credentials file not found at: {cred_path}")
-
-cred = credentials.Certificate(cred_path)
-initialize_app(cred)
-db = firestore.client()
+db = None
+if os.path.exists(cred_path):
+    try:
+        cred = credentials.Certificate(cred_path)
+        initialize_app(cred)
+        db = firestore.client()
+    except Exception as e:
+        print(f"Warning: Failed to initialize Firebase: {e}")
+else:
+    print(f"Warning: Firebase credentials file not found at {cred_path}. Firebase persistence disabled.")
 
 # -------------------------
 # OCR Setup
@@ -274,12 +280,22 @@ def signup():
         supporting_doc = request.files.get("supportingDoc")
         
         if supporting_doc and supporting_doc.filename:
-            filename = supporting_doc.filename
-            if not is_allowed_file(filename):
-                return jsonify({"error": f"Unsupported file type: {filename}"}), 400
+            raw_filename = supporting_doc.filename
+            if not is_allowed_file(raw_filename):
+                return jsonify({"error": f"Unsupported file type: {raw_filename}"}), 400
+
+            safe_name = secure_filename(os.path.basename(raw_filename))
+            if not safe_name or not is_allowed_file(safe_name):
+                ext = raw_filename.rsplit('.', 1)[1].lower() if '.' in raw_filename else 'bin'
+                safe_name = f"upload_{uuid.uuid4().hex[:8]}.{ext}"
 
             with tempfile.TemporaryDirectory() as temp_dir:
-                file_path = os.path.join(temp_dir, filename)
+                temp_dir_abs = os.path.abspath(temp_dir)
+                file_path = os.path.abspath(os.path.join(temp_dir, safe_name))
+                if not file_path.startswith(temp_dir_abs + os.sep):
+                    return jsonify({"error": "Path traversal detected in upload filename."}), 400
+
+                filename = safe_name
                 supporting_doc.save(file_path)
                 
                 try:
@@ -383,8 +399,11 @@ def signup():
             "verified": True  # Auto-verify since OCR validation passed
         }
         
-        db.collection("users").add(user_data)
-        print(f"User {username} registered successfully")
+        if db is not None:
+            db.collection("users").add(user_data)
+            print(f"User {username} registered successfully")
+        else:
+            print(f"User {username} validated (db client not active)")
 
         return jsonify({
             "success": True, 

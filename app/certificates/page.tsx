@@ -4,7 +4,19 @@ import { useState } from "react"
 import { CertificateCard } from "@/components/certificates/certificate-card"
 import { CertificatePreview } from "@/components/certificates/certificate-preview"
 
-const mockCertificates = [
+interface CertificateItem {
+  id: number;
+  title: string;
+  issuer: string;
+  issueDate: string;
+  expiryDate: string;
+  credentialId: string;
+  skills: string[];
+  verificationUrl: string;
+  status: "active" | "expiring" | "expired";
+}
+
+const mockCertificates: CertificateItem[] = [
   {
     id: 1,
     title: "Web Application Security Expert",

@@ -33,7 +33,7 @@ export function RewardsStore() {
     setRedeeming(rewardId)
 
     try {
-      const result = redeemReward(user.id, rewardId)
+      const result = await redeemReward(user.id, rewardId)
       if (result.success) {
         alert("Reward redeemed successfully!")
       } else {

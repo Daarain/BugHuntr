@@ -9,15 +9,6 @@ import { useAuth } from "@/components/auth/auth-context";
 import { useRanking } from "@/hooks/use-ranking";
 import { RankProgress } from "@/components/ranking/rank-progress";
 import { PointsHistory } from "@/components/ranking/points-history";
-import { db } from "@/firebaseConfig";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  orderBy,
-  limit,
-} from "firebase/firestore";
 import { Card, CardContent } from "@/components/ui/card";
 
 interface UserProfile {
@@ -63,15 +54,10 @@ export default function ProfilePage() {
       }
 
       try {
-        // Get user profile
-        const usersQuery = query(
-          collection(db, "users"),
-          where("email", "==", user.email),
-        );
-        const snapshot = await getDocs(usersQuery);
-
-        if (!snapshot.empty) {
-          const userDoc = snapshot.docs[0].data();
+        // 1. Fetch user profile
+        const profileRes = await fetch("/api/user/profile", { credentials: "include" });
+        if (profileRes.ok) {
+          const userDoc = await profileRes.json();
           const joinDate = userDoc.createdAt
             ? new Date(userDoc.createdAt).toLocaleDateString("en-US", {
                 year: "numeric",
@@ -79,52 +65,53 @@ export default function ProfilePage() {
               })
             : "January 2024";
 
+          // 2. Fetch stats
+          const statsRes = await fetch("/api/user/stats", { credentials: "include" });
+          const stats = statsRes.ok ? await statsRes.json() : {};
+
+          const points = stats.points ?? userDoc.points ?? 0;
+          const bugsSubmitted = stats.bugsSubmitted ?? 0;
+
           setUserProfile({
-            id: snapshot.docs[0].id,
-            username: userDoc.username || "Unknown",
+            id: userDoc.id || user.id,
+            username: userDoc.username || user.username || "Unknown",
             displayName:
-              userDoc.name || userDoc.displayName || userDoc.username || "User",
-            avatar: userDoc.avatar || userDoc.photoURL || "",
+              userDoc.displayName || userDoc.name || user.username || "User",
+            avatar: userDoc.avatarUrl || userDoc.avatar || "",
             email: user.email,
             bio: userDoc.bio || "Security researcher and bug hunter",
             joinDate: joinDate,
-            location: userDoc.location || "Global",
-            website: userDoc.website || "",
-            points: userDoc.points || 0,
-            bugsSubmitted: userDoc.bugsSubmitted || 0,
-            role: userDoc.role || "user",
+            location: userDoc.country || "Global",
+            website: "",
+            points: points,
+            bugsSubmitted: bugsSubmitted,
+            role: user.role || "user",
             companyName: userDoc.companyName || "",
           });
 
           // Generate badges based on user stats
-          const userBadges = generateBadges(
-            userDoc.points || 0,
-            userDoc.bugsSubmitted || 0,
-          );
+          const userBadges = generateBadges(points, bugsSubmitted);
           setBadges(userBadges);
         }
 
-        // Fetch recent bug reports as activity
-        const bugsQuery = query(
-          collection(db, "bugs"),
-          where("email", "==", user.email),
-          orderBy("submittedAt", "desc"),
-          limit(5),
-        );
-        const bugsSnapshot = await getDocs(bugsQuery);
-        const activities = bugsSnapshot.docs.map((doc, index) => {
-          const data = doc.data();
-          return {
+        // 3. Fetch recent bug reports as activity
+        const bugsRes = await fetch("/api/bug-submissions", { credentials: "include" });
+        if (bugsRes.ok) {
+          const subsData = await bugsRes.json();
+          const submissions = Array.isArray(subsData.submissions)
+            ? subsData.submissions.slice(0, 5)
+            : [];
+          const activities = submissions.map((data: any, index: number) => ({
             id: index + 1,
             type: "report" as const,
             title: data.title || "Bug Report",
-            company: data.company || "Unknown",
-            bounty: data.bounty || 0,
-            date: data.submittedAt ? formatDate(data.submittedAt) : "Recently",
+            company: data.org_id || data.company || "Bounty Program",
+            bounty: data.reward_amount || data.bounty || 0,
+            date: data.created_at ? formatDate(data.created_at) : "Recently",
             status: data.status || "pending",
-          };
-        });
-        setRecentActivity(activities);
+          }));
+          setRecentActivity(activities);
+        }
       } catch (error) {
         console.error("Error fetching profile:", error);
       } finally {

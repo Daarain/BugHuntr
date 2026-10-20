@@ -4,24 +4,18 @@ import type React from "react"
 import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/components/auth/auth-context"
 import { useRanking } from "@/hooks/use-ranking"
-import { updateUserStats } from "@/lib/update-user-stats"
 import { SEVERITY_POINTS } from "@/types/ranking"
 import { useRouter } from "next/navigation"
 import { Bug, Trophy, AlertTriangle, Star, Upload } from "lucide-react"
 import { FadeIn } from "@/components/animations/fade-in"
-import { db } from "@/firebaseConfig"
-import { collection, addDoc, Timestamp, query, where, getDocs, limit } from "firebase/firestore"
 
-// ☁ Cloudinary Configuration
-// TODO: Replace with your actual Cloudinary credentials
-const CLOUD_NAME = "dv4jmmzkh"          // Replace with your Cloudinary cloud name
-const UPLOAD_PRESET = "unsigned_upload"   // Replace with your unsigned preset
 const SCREENSHOT_ANALYZER_URL =
   process.env.NEXT_PUBLIC_SCREENSHOT_ANALYZER_URL || "http://localhost:8001"
 
@@ -108,7 +102,7 @@ export default function SubmitBugPage() {
       .join("")
   }
 
-  const isDuplicateApprovedBug = async (descriptionHash?: string, imageHash?: string) => {
+  const isDuplicateApprovedBug = async () => {
     const normalizedTitle = normalizeText(formData.title)
     const normalizedCompany = normalizeText(formData.company)
 
@@ -116,147 +110,28 @@ export default function SubmitBugPage() {
       return false
     }
 
-    const isDuplicateStatus = (status?: string) => {
-      const normalized = (status || "").toLowerCase().trim()
-      return normalized === "approved" || normalized === "pending"
-    }
-
-    const matchesDuplicate = (data: {
-      title?: string
-      description?: string
-      normalizedTitle?: string
-      normalizedCompany?: string
-      descriptionHash?: string
-      imageHash?: string
-      proofOfConceptUrl?: string
-      status?: string
-    }) => {
-      if (!isDuplicateStatus(data.status)) {
-        return false
+    try {
+      const params = new URLSearchParams({
+        checkTitle: formData.title.trim(),
+        company: formData.company.trim(),
+      })
+      const res = await fetch(`/api/bug-submissions?${params.toString()}`, {
+        credentials: "include",
+      })
+      if (res.ok) {
+        const data = await res.json()
+        return Boolean(data.duplicate)
       }
-
-      const existingTitle = normalizeText(data.title || data.normalizedTitle || "")
-      const existingDescription = normalizeText(data.description || "")
-
-      if (existingTitle && existingTitle === normalizedTitle) {
-        return true
-      }
-
-      if (descriptionHash && data.descriptionHash && data.descriptionHash === descriptionHash) {
-        return true
-      }
-
-      if (imageHash && data.imageHash && data.imageHash === imageHash) {
-        return true
-      }
-
-      if (existingDescription && normalizeText(formData.description) === existingDescription) {
-        return true
-      }
-
-      if (uploadedUrl && data.proofOfConceptUrl && uploadedUrl === data.proofOfConceptUrl) {
-        return true
-      }
-
+      return false
+    } catch {
       return false
     }
-
-    const baseFilters = [
-      where("normalizedCompany", "==", normalizedCompany),
-      where("status", "in", ["approved", "pending"]),
-    ]
-
-    const titleQuery = query(
-      collection(db, "bugs"),
-      where("normalizedTitle", "==", normalizedTitle),
-      ...baseFilters,
-      limit(1)
-    )
-    const titleSnapshot = await getDocs(titleQuery)
-    if (!titleSnapshot.empty) {
-      return true
-    }
-
-    if (descriptionHash) {
-      const descQuery = query(
-        collection(db, "bugs"),
-        where("descriptionHash", "==", descriptionHash),
-        ...baseFilters,
-        limit(1)
-      )
-      const descSnapshot = await getDocs(descQuery)
-      if (!descSnapshot.empty) {
-        return true
-      }
-    }
-
-    if (imageHash) {
-      const imgQuery = query(
-        collection(db, "bugs"),
-        where("imageHash", "==", imageHash),
-        ...baseFilters,
-        limit(1)
-      )
-      const imgSnapshot = await getDocs(imgQuery)
-      if (!imgSnapshot.empty) {
-        return true
-      }
-    }
-
-    const fallbackQueries = [
-      query(
-        collection(db, "bugs"),
-        where("company", "==", formData.company),
-        where("status", "in", ["approved", "pending"]),
-        limit(50)
-      ),
-      query(
-        collection(db, "bugSubmissions"),
-        where("company", "==", formData.company),
-        where("status", "in", ["approved", "pending"]),
-        limit(50)
-      ),
-      query(
-        collection(db, "bugs"),
-        where("normalizedCompany", "==", normalizedCompany),
-        where("status", "in", ["approved", "pending"]),
-        limit(50)
-      ),
-      query(
-        collection(db, "bugSubmissions"),
-        where("normalizedCompany", "==", normalizedCompany),
-        where("status", "in", ["approved", "pending"]),
-        limit(50)
-      ),
-    ]
-
-    const snapshots = await Promise.all(fallbackQueries.map((q) => getDocs(q)))
-    for (const snapshot of snapshots) {
-      for (const doc of snapshot.docs) {
-        const data = doc.data() as {
-          title?: string
-          description?: string
-          normalizedTitle?: string
-          normalizedCompany?: string
-          descriptionHash?: string
-          imageHash?: string
-          proofOfConceptUrl?: string
-          status?: string
-        }
-
-        if (matchesDuplicate(data)) {
-          return true
-        }
-      }
-    }
-
-    return false
   }
 
   // Call backend for severity detection
   const detectSeverity = async () => {
     if (!formData.title || !formData.description) {
-      alert("Please fill in Title and Technical Description before detecting severity.")
+      toast.error("Please fill in Title and Technical Description before detecting severity.")
       return
     }
     try {
@@ -284,7 +159,7 @@ export default function SubmitBugPage() {
           setFakeReport(data.fake_report as FakeReportResult)
         }
       } else {
-        alert("Failed to detect severity. Please try again.")
+        toast.error("Failed to detect severity. Please try again.")
       }
 
       if (formData.pocFile || uploadedUrl) {
@@ -292,7 +167,7 @@ export default function SubmitBugPage() {
       }
     } catch (err) {
       console.error("Error detecting severity:", err)
-      alert("Error connecting to severity detection service.")
+      toast.error("Error connecting to severity detection service.")
     } finally {
       setDetectingSeverity(false)
     }
@@ -301,7 +176,7 @@ export default function SubmitBugPage() {
   // ☁ Upload Proof of Concept to Cloudinary (with base64 fallback)
   const handleFileUpload = async () => {
     if (!formData.pocFile) {
-      alert("Please select an image or video first!")
+      toast.error("Please select an image or video first!")
       return
     }
 
@@ -315,27 +190,24 @@ export default function SubmitBugPage() {
         console.warn("Proof analysis failed; continuing with upload.")
       }
 
-      // Try Cloudinary first
+      // Route upload through protected server endpoint
       const formDataUpload = new FormData()
       formDataUpload.append("file", formData.pocFile)
-      formDataUpload.append("upload_preset", UPLOAD_PRESET)
+      formDataUpload.append("folder", "submissions")
 
-      console.log("Uploading to:", `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`)
-      const response = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`, {
+      const response = await fetch("/api/cloudinary/upload", {
         method: "POST",
+        credentials: "include",
         body: formDataUpload,
       })
 
-      console.log("Upload response status:", response.status)
-      const data = await response.json()
-      console.log("Upload response data:", data)
+      const data = await response.json().catch(() => null)
       
-      if (data.secure_url) {
-        setUploadedUrl(data.secure_url)
-        console.log("Cloudinary upload successful! URL:", data.secure_url)
-        alert("✅ Proof uploaded successfully!")
+      if (response.ok && data?.url) {
+        setUploadedUrl(data.url)
+        toast.success("Proof uploaded successfully!")
       } else {
-        throw new Error("Cloudinary upload failed")
+        throw new Error(data?.error || "Cloudinary upload failed")
       }
     } catch (err) {
       console.error("Cloudinary upload failed, trying base64 fallback:", err)
@@ -345,10 +217,10 @@ export default function SubmitBugPage() {
         const base64 = await convertToBase64(formData.pocFile)
         setUploadedUrl(base64)
         console.log("Base64 upload successful!")
-        alert("✅ Proof uploaded successfully! (Using base64 fallback)")
+        toast.success("Proof uploaded successfully! (Using base64 fallback)")
       } catch (base64Error) {
         console.error("Base64 conversion failed:", base64Error)
-        alert("❌ Upload failed. Please try again.")
+        toast.error("Upload failed. Please try again.")
       }
     } finally {
       setUploadingProof(false)
@@ -357,7 +229,7 @@ export default function SubmitBugPage() {
 
   const analyzeProof = async (proofUrl?: string) => {
     if (!formData.description) {
-      alert("Please add a Technical Description before analyzing the proof.")
+      toast.error("Please add a Technical Description before analyzing the proof.")
       return false
     }
 
@@ -369,7 +241,7 @@ export default function SubmitBugPage() {
     const isImage = Boolean(formData.pocFile?.type.startsWith("image/"))
     const isPdf = formData.pocFile?.type === "application/pdf"
     if (!isImage && !isPdf) {
-      alert("Proof analysis currently supports images or PDF screenshots only.")
+      toast.error("Proof analysis currently supports images or PDF screenshots only.")
       return
     }
 
@@ -399,7 +271,7 @@ export default function SubmitBugPage() {
           }),
         })
       } else {
-        alert("Please upload a proof file first.")
+        toast.error("Please upload a proof file first.")
         return
       }
 
@@ -414,7 +286,7 @@ export default function SubmitBugPage() {
       return true
     } catch (err) {
       console.error("Error analyzing proof:", err)
-      alert("Error connecting to proof analysis service.")
+      toast.error("Error connecting to proof analysis service.")
       return false
     } finally {
       setAnalyzingProof(false)
@@ -427,99 +299,63 @@ export default function SubmitBugPage() {
     setIsSubmitting(true)
 
     try {
-      const normalizedDescription = normalizeText(formData.description)
-      const descriptionHash = normalizedDescription ? await hashText(normalizedDescription) : undefined
-      const imageHash = formData.pocFile ? await hashFile(formData.pocFile) : undefined
-
-      const duplicateFound = await isDuplicateApprovedBug(descriptionHash, imageHash)
+      const duplicateFound = await isDuplicateApprovedBug()
       if (duplicateFound) {
-        alert("This bug appears to already be reported and approved. Please submit a different issue.")
+        toast.error("This bug appears to already be reported and approved. Please submit a different issue.")
         return
       }
 
-      const bugData = {
-        title: formData.title,
-        company: formData.company,
-        normalizedTitle: normalizeText(formData.title),
-        normalizedCompany: normalizeText(formData.company),
-        descriptionHash: descriptionHash || "",
-        imageHash: imageHash || "",
+      const bugPayload = {
+        title: formData.title.trim(),
+        company: formData.company.trim(),
         category: formData.category || "General",
         severity: formData.severity,
-        description: formData.description,
-        impact: formData.summary,
+        description: formData.description.trim(),
+        summary: formData.summary,
         proofOfConceptUrl: uploadedUrl || "",
-        fakeReport: fakeReport
-          ? {
-              status: fakeReport.status,
-              score: fakeReport.score,
-              reasons: fakeReport.reasons,
-            }
-          : null,
-        submittedBy: user.id,
-        submittedAt: Timestamp.now().toDate().toISOString(),
-        status: "pending",
+        stepsToReproduce: formData.description.trim(),
       }
-      
-      console.log("Submitting bug data:", bugData)
-      console.log("Uploaded URL:", uploadedUrl)
-      
-      // Add bug to Firestore
-      const bugDocRef = await addDoc(collection(db, "bugs"), bugData)
+
+      console.log("Submitting bug data to API:", bugPayload)
+
+      const response = await fetch("/api/bug-submissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(bugPayload),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null)
+        if (response.status === 409) {
+          toast.error(errorData?.error || "This bug appears to already be reported and is pending or approved.")
+          return
+        }
+        throw new Error(errorData?.error || "Failed to submit bug report")
+      }
+
+      const createdBug = await response.json()
+      console.log("Bug submitted successfully:", createdBug)
 
       // Add points based on severity
       if (formData.severity) {
         const severity = formData.severity as "critical" | "high" | "medium" | "low"
         const points = SEVERITY_POINTS[severity]
-        
+
         console.log(`Submitting bug with severity: ${severity}, points: ${points}, user: ${user.username}`)
-        
+
         // Update local ranking state
         addPoints(user.id, Date.now(), severity, `Bug report: ${formData.title} (${severity} severity)`)
-        
-        // Update points and bug count in Firestore userProfiles
-        const statsUpdated = await updateUserStats(user.username, points, 1, user.role, user.companyName)
-        
-        if (statsUpdated) {
-          console.log("Stats updated successfully")
-        } else {
-          console.error("Failed to update stats")
-        }
-        
-        // Also add bug submission to user's submission history
-        await addDoc(collection(db, "bugSubmissions"), {
-          bugId: bugDocRef.id,
-          userId: user.id,
-          username: user.username,
-          title: formData.title,
-          severity: formData.severity,
-          points: points,
-          proofOfConceptUrl: uploadedUrl || "",
-          fakeReport: fakeReport
-            ? {
-                status: fakeReport.status,
-                score: fakeReport.score,
-                reasons: fakeReport.reasons,
-              }
-            : null,
-          submittedAt: Timestamp.now().toDate().toISOString(),
-          status: "pending",
-          huntId: "", // Direct submission, not from a hunt
-          huntTitle: "Direct Submission",
-          description: formData.description,
-          impact: formData.summary,
-        })
-        
-        console.log("Bug submission saved to both collections")
-        alert(`Bug submitted successfully! You earned ${points} points. Your submission is now under review.`)
+
+        toast.success("Bug submitted successfully! Your submission is now under review. Points will be awarded upon verification.")
       } else {
-        alert("Bug submitted successfully! Your submission is now under review.")
+        toast.success("Bug submitted successfully! Your submission is now under review.")
       }
 
       router.push("/my-submissions")
     } catch (error) {
       console.error("Error submitting bug:", error)
-      alert("Error submitting bug report. Please try again.")
+      toast.error("Error submitting bug report. Please try again.")
     } finally {
       setIsSubmitting(false)
     }

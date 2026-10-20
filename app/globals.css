@@ -10,6 +10,13 @@
 }
 html {
   scroll-behavior: smooth;
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 /* Legacy helper class retained, updated to the shared accent system. */

@@ -2,8 +2,6 @@
 
 import React, { useState, useCallback } from "react"
 import { useEffect } from "react"
-import { db } from "@/firebaseConfig"
-import { collection, query, where, getDocs } from "firebase/firestore"
 import type { BugSubmission } from "@/types/bug-submission"
 
 // Mock data for submissions (in a real app, this would come from an API)
@@ -126,18 +124,18 @@ export function useBugSubmission() {
     [],
   );
 
-  // Fetch submissions for a user from Firestore
+  // Fetch submissions for a user from server API (backed by MongoDB)
   const getSubmissionsByUser = useCallback(async (userId: string) => {
     if (!userId) return [];
     try {
-      // Only query bugHuntSubmissions collection for hunt-related submissions
-      const q = query(collection(db, "bugHuntSubmissions"), where("userId", "==", userId));
-      const querySnapshot = await getDocs(q);
-      const userSubs: BugSubmission[] = [];
-      querySnapshot.forEach((doc) => {
-        userSubs.push({ id: doc.id, ...doc.data() } as BugSubmission);
+      const res = await fetch(`/api/bug-submissions?userId=${encodeURIComponent(userId)}`, {
+        credentials: "include",
       });
-      return userSubs;
+      if (res.ok) {
+        const userSubs: BugSubmission[] = await res.json();
+        return userSubs;
+      }
+      return mockSubmissions.filter((submission) => submission.submittedBy === userId);
     } catch (err) {
       // fallback to mockSubmissions if error
       return mockSubmissions.filter((submission) => submission.submittedBy === userId);

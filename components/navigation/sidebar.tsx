@@ -112,9 +112,7 @@ function SidebarComponent({ isOpen = false, onClose }: SidebarProps) {
       id: "learn",
       label: "Learn",
       icon: Brain,
-      href: "https://maaz.great-site.net/?i=1",
-      target: "_blank",
-      rel: "noopener noreferrer",
+      href: "/docs#learning-resources",
     },
     {
       id: "communities",
@@ -122,7 +120,7 @@ function SidebarComponent({ isOpen = false, onClose }: SidebarProps) {
       icon: Users,
       href: "/communities",
     },
-    { id: "docs", label: "Documentations", icon: FileText, href: "/docs" },
+    { id: "docs", label: "Documentation", icon: FileText, href: "/docs" },
     ...(user?.role === "admin"
       ? [
           {
@@ -331,13 +329,13 @@ function SidebarComponent({ isOpen = false, onClose }: SidebarProps) {
                   <span className="text-primary font-bold text-sm">
                     {user?.username
                       ? user.username.charAt(0).toUpperCase()
-                      : "JD"}
+                      : "U"}
                   </span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1 mb-1">
                     <p className="text-sm font-medium text-sidebar-foreground truncate flex-1">
-                      {user?.username || "John Doe"}
+                      {user?.username || "Researcher"}
                     </p>
                     <div className="flex-shrink-0">
                       <VerificationBadge

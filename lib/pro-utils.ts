@@ -1,5 +1,6 @@
 // BugHuntr Pro Utility Functions
-import { type ProRecommendation, type HunterEligibility } from "@/types/pro";
+import { type ProRecommendation, type HunterEligibility, type ProInvitation } from "@/types/pro";
+import type { ProInvitationDoc } from "@/lib/db/types";
 
 // Rank scoring weights
 const RANK_SCORES: Record<string, number> = {
@@ -328,4 +329,23 @@ export function getRoleBadgeColor(role: "user" | "admin"): string {
 // Get user type badge color
 export function getUserTypeBadgeColor(userType: "company" | "hunter"): string {
   return userType === "company" ? "bg-amber-600" : "bg-green-600";
+}
+
+export function mapDocToProInvitation(doc: ProInvitationDoc): ProInvitation {
+  return {
+    id: doc._id,
+    huntId: doc.hunt_id,
+    huntTitle: doc.hunt_title || "Pro Bug Hunt",
+    companyName: doc.company_name || "Security Partner",
+    hunterId: doc.hunter_id,
+    hunterName: doc.hunter_name || doc.hunter_username || "Researcher",
+    hunterUsername: doc.hunter_username,
+    email: doc.recipient_email,
+    token: doc.token,
+    invitedBy: doc.invited_by || doc.sender_id || "Platform",
+    status: doc.status,
+    invitedAt: doc.created_at ? new Date(doc.created_at).toISOString() : new Date().toISOString(),
+    expiresAt: doc.expires_at ? new Date(doc.expires_at).toISOString() : new Date().toISOString(),
+    acceptedAt: doc.responded_at ? new Date(doc.responded_at).toISOString() : undefined,
+  };
 }

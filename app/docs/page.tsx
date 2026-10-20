@@ -26,13 +26,13 @@ export default function DocsPage() {
             cybersecurity fundamentals, learn about vulnerabilities, and
             effectively use our platform to contribute to a safer digital world.
           </p>
-          <button className="bg-primary text-white font-bold px-8 py-4 rounded-lg text-xl shadow hover:bg-primary/90 transition">
+          <a href="#table-of-contents" className="inline-block bg-primary text-white font-bold px-8 py-4 rounded-lg text-xl shadow hover:bg-primary/90 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             Explore Documentation
-          </button>
+          </a>
         </div>
       </div>
 
-      <div className="rounded-xl shadow p-8 mb-8 bg-gray-50 dark:bg-gray-800">
+      <div id="table-of-contents" className="rounded-xl shadow p-8 mb-8 bg-gray-50 dark:bg-gray-800">
         <h3 className="text-3xl font-bold mb-4 text-gray-900 dark:text-gray-100">
           Table of Contents
         </h3>

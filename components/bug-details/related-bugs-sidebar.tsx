@@ -47,10 +47,10 @@ export function RelatedBugsSidebar({ bugs }: RelatedBugsSidebarProps) {
           >
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <Badge className={getSeverityColor(bug.severity)} size="sm">
+                <Badge className={getSeverityColor(bug.severity)}>
                   {bug.severity.toUpperCase()}
                 </Badge>
-                <Badge variant="outline" size="sm">
+                <Badge variant="outline">
                   {bug.company}
                 </Badge>
               </div>

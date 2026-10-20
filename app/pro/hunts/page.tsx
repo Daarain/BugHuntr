@@ -24,8 +24,6 @@ import { mockProHunts } from "@/data/mock-pro-data";
 import { type ProHunt, type ProInvitation } from "@/types/pro";
 import { useAuth } from "@/components/auth/auth-context";
 import { getUserPermissions } from "@/lib/pro-utils";
-import { db } from "@/firebaseConfig";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
 
 export default function ProHuntsPage() {
   const router = useRouter();
@@ -181,6 +179,7 @@ export default function ProHuntsPage() {
   }, [sortedManagedHunts, selectedManageHunt, viewMode]);
 
   useEffect(() => {
+    let mounted = true;
     if (viewMode !== "manage" || !selectedManageHunt?.id) {
       setAcceptedInvites([]);
       setAcceptedInvitesLoading(false);
@@ -188,29 +187,32 @@ export default function ProHuntsPage() {
     }
 
     setAcceptedInvitesLoading(true);
-    const invitesQuery = query(
-      collection(db, "proInvitations"),
-      where("huntId", "==", selectedManageHunt.id),
-      where("status", "==", "accepted"),
-    );
 
-    const unsubscribe = onSnapshot(
-      invitesQuery,
-      (snapshot) => {
-        const invites = snapshot.docs.map((docSnap) => ({
-          id: docSnap.id,
-          ...(docSnap.data() as Omit<ProInvitation, "id">),
-        }));
-        setAcceptedInvites(invites);
-        setAcceptedInvitesLoading(false);
-      },
-      (error) => {
+    async function loadAcceptedInvites() {
+      try {
+        const res = await fetch(
+          `/api/pro/invitations?huntId=${encodeURIComponent(selectedManageHunt!.id)}&status=accepted`,
+          { credentials: "include" },
+        );
+        if (res.ok && mounted) {
+          const data = await res.json();
+          const list = Array.isArray(data?.invitations) ? data.invitations : [];
+          setAcceptedInvites(list);
+        } else if (mounted) {
+          setAcceptedInvites([]);
+        }
+      } catch (error) {
         console.error("Failed to load accepted invitations:", error);
-        setAcceptedInvitesLoading(false);
-      },
-    );
+        if (mounted) setAcceptedInvites([]);
+      } finally {
+        if (mounted) setAcceptedInvitesLoading(false);
+      }
+    }
 
-    return () => unsubscribe();
+    loadAcceptedInvites();
+    return () => {
+      mounted = false;
+    };
   }, [selectedManageHunt?.id, viewMode]);
 
   const handleApply = (hunt: ProHunt) => {

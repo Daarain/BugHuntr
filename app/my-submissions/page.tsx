@@ -122,7 +122,7 @@ export default function MySubmissionsPage() {
 
         {/* Stats Cards */}
         <FadeIn delay={0.1}>
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-4 overflow-x-auto scrollbar-thin scrollbar-thumb-cyber-blue/30 scrollbar-track-transparent min-w-[400px] md:min-w-0">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 sm:gap-4 w-full">
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-2">

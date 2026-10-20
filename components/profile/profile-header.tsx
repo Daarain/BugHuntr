@@ -13,7 +13,6 @@ import { VerificationBadge } from "@/components/ui/verification-badge"
 import { useAuth } from "@/components/auth/auth-context"
 import type { UserRanking } from "@/types/ranking"
 import { useEffect, useState } from "react"
-import { getUserProfileByUsername } from "@/lib/get-user-profile"
 
 interface ProfileHeaderProps {
   user: {
@@ -45,8 +44,15 @@ export function ProfileHeader({ user, userRanking }: ProfileHeaderProps) {
       setPointsError(null);
       try {
         if (user?.username) {
-          const profile = await getUserProfileByUsername(user.username);
-          setProfilePoints((profile as any)?.points ?? null);
+          const res = await fetch(`/api/user/profile?username=${encodeURIComponent(user.username)}`, {
+            credentials: "include",
+          });
+          if (res.ok) {
+            const profile = await res.json();
+            setProfilePoints((profile as any)?.points ?? null);
+          } else {
+            setProfilePoints(null);
+          }
         } else {
           setProfilePoints(null);
         }

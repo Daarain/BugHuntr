@@ -156,26 +156,28 @@ export function computeBaseScore(vectorString: string): CvssScoring | null {
     const pr = scorePrivilegesRequired(vector.PR, scopeChanged);
     const ui = scoreUserInteraction(vector.UI);
 
-    // Step 2: Calculate Impact (C, I, A components)
+    // Step 2: Calculate Impact Sub-Score (ISS)
     const c = scoreImpactMetric(vector.C);
     const i = scoreImpactMetric(vector.I);
     const a = scoreImpactMetric(vector.A);
 
-    // Step 3: Calculate Impact sub-score (depends on Scope)
+    const iss = 1 - (1 - c) * (1 - i) * (1 - a);
+
+    // Step 3: Calculate Impact (depends on Scope)
     let impact: number;
     if (!scopeChanged) {
-      impact = Math.min(1, c + i + a);
+      impact = 6.42 * iss;
     } else {
-      impact = Math.min(0.915, 7.52 * (c + i + a) - 0.029);
+      impact = 7.52 * (iss - 0.029) - 3.25 * Math.pow(iss - 0.02, 15);
     }
 
-    // Step 4: If Impact is 0, base score is 0
-    if (impact === 0) {
+    // Step 4: If Impact <= 0, base score is 0
+    if (impact <= 0) {
       return { baseScore: 0.0, severity: "NONE" };
     }
 
     // Step 5: Calculate Exploitability
-    const exploitability = av * ac * pr * ui;
+    const exploitability = 8.22 * av * ac * pr * ui;
 
     // Step 6: Calculate Base Score
     let baseScore: number;
@@ -185,8 +187,8 @@ export function computeBaseScore(vectorString: string): CvssScoring | null {
       baseScore = Math.min(10, 1.08 * (impact + exploitability));
     }
 
-    // Round to 1 decimal place
-    baseScore = Math.round(baseScore * 10) / 10;
+    // Round to 1 decimal place (FIRST.org roundup)
+    baseScore = Math.ceil(Number(baseScore.toFixed(5)) * 10) / 10;
 
     // Determine severity rating
     let severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "NONE";
